@@ -1,0 +1,20 @@
+{
+  "name": "hd-redraw-stitch",
+  "interface": {
+    "displayName": "高清重绘与拼接"
+  },
+  "plugins": [
+    {
+      "name": "hd-redraw-stitch",
+      "source": {
+        "source": "local",
+        "path": "./"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Design"
+    }
+  ]
+}

@@ -1,7 +1,7 @@
 import json,os,subprocess,sys,tempfile,unittest
 from pathlib import Path
 from PIL import Image,ImageDraw
-ROOT=Path(__file__).resolve().parents[1];SCRIPTS=ROOT/'skills/restore-image-hd/scripts';CLI=ROOT/'tests/fake_image_cli.py'
+ROOT=Path(__file__).resolve().parents[1];SCRIPTS=ROOT/'skills/hd-redraw-stitch/scripts';CLI=ROOT/'tests/fake_image_cli.py'
 class RouteTests(unittest.TestCase):
  def run_route(self,route,p,*extra):
   env={**os.environ,'FAKE_IMAGE_LOG':str(p/'calls.jsonl')}

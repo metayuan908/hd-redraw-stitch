@@ -1,27 +1,28 @@
 {
-  "name": "restore-image-hd",
-  "version": "0.4.2+codex.20261029",
-  "description": "Native-capacity preflight, durable two-worker redraw queues, bounded geometry QC and deterministic seam compositing through local Codex authentication.",
+  "name": "hd-redraw-stitch",
+  "version": "0.5.0+codex.20261104",
+  "description": "GPT / Codex 高清放大、4K 高清重绘与分块拼接。仅在图像处理请求含 4k高清重绘、4k、分块、分区高清重绘、插件高清重绘任一关键词时自动触发；单独“高清重绘”不触发。HD Redraw & Stitch generatively reconstructs existing images.",
   "author": {
     "name": "Yuanwei"
   },
   "skills": "./skills/",
   "interface": {
-    "displayName": "GPT 高清重绘与拼接",
-    "shortDescription": "通过分割蒙版或原生分块重绘生成准确尺寸的高清图像",
-    "longDescription": "先进行保守风险判定，再使用语义蒙版局部重绘、完整构图锚点、原生细节分块和确定性合成，将海报、产品、人物、建筑与纹理重绘为 HD、2K、4K、8K 或自定义尺寸。",
+    "displayName": "高清重绘与拼接",
+    "shortDescription": "GPT / Codex 高清放大、4K 高清重绘与分块拼接",
+    "longDescription": "基于 GPT Image 和 Codex 登录的高清放大、4K 高清重绘与分块拼接插件。对既有图像进行保真重绘与拼接。图像处理请求含“4k高清重绘”“4k”“分块”“分区高清重绘”“插件高清重绘”任一关键词时自动触发，4K 大小写不敏感；也可显式选择插件。单独“高清重绘”不触发。先判断结构风险，再用语义蒙版或整图锚定分块重绘并合成高清输出。普通生成和编辑使用 Codex 内置 imagegen。",
     "developerName": "Yuanwei",
     "category": "Design",
     "capabilities": [
-      "Image generation",
-      "Image editing",
+      "High-resolution image restoration",
       "Mask-driven inpainting",
+      "Tiled reconstruction",
+      "Deterministic compositing",
       "Local files"
     ],
     "defaultPrompt": [
-      "用 $restore-image-hd 先判断是否适合分块，再将这张图保真重绘成 4K。",
-      "用 $restore-image-hd 对海报进行分割蒙版重绘，只生成无文字高清背景。",
-      "用 $restore-image-hd 重绘产品图，重点保持材质、转角和结构连续。"
+      "用 $hd-redraw-stitch 将这张既有图片做4K高清重绘，保持原构图。",
+      "用 $hd-redraw-stitch 对这张海报做分区高清重绘，原文字保持不变。",
+      "用 $hd-redraw-stitch 对这张产品照片做分块重绘，保持结构和材质连续。"
     ]
   }
 }

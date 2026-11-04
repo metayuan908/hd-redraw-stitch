@@ -2,7 +2,7 @@ import json,os,subprocess,sys,tempfile,unittest
 from pathlib import Path
 from PIL import Image,ImageDraw
 ROOT=Path(__file__).resolve().parents[1]
-SCRIPT=ROOT/'skills/restore-image-hd/scripts/gpt_segmented_redraw.py'
+SCRIPT=ROOT/'skills/hd-redraw-stitch/scripts/gpt_segmented_redraw.py'
 CLI=ROOT/'tests/fake_image_cli.py'
 
 class PipelineTests(unittest.TestCase):

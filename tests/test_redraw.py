@@ -2,7 +2,7 @@ import json,os,sys,tempfile,threading,time,unittest
 from pathlib import Path
 from unittest.mock import patch
 ROOT=Path(__file__).resolve().parents[1]
-sys.path.insert(0,str(ROOT/'skills/restore-image-hd/scripts'))
+sys.path.insert(0,str(ROOT/'skills/hd-redraw-stitch/scripts'))
 from PIL import Image,ImageChops,ImageDraw
 import numpy as np
 from redraw_runtime import run_jobs,signature,file_hash,JobLock,native_budget,save_capacity

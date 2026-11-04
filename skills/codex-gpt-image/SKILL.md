@@ -1,18 +1,23 @@
 ---
 name: codex-gpt-image
-description: Generate or edit images with gpt-image-2 through Codex/ChatGPT subscription authentication instead of OPENAI_API_KEY. Use for text-to-image, reference-image editing, or visual assets when the user wants local Codex auth, especially when no native image tool is available. Do not use for official OpenAI API-key billing or OpenAI-compatible gateways.
+description: Internal GPT Image 2 backend for hd-redraw-stitch, used only after that workflow passes its keyword gate or is explicitly invoked. Never select this helper directly for image requests or for “高清重绘” alone. Sends image requests through Codex OAuth; not for API-key billing or compatible gateways.
 ---
 
-# Codex GPT Image
+# GPT Image backend for HD Redraw & Stitch
 
-Use this skill to generate or edit images through Codex OAuth instead of the OpenAI API-key path. The bundled CLI reads the local Codex auth file and calls the Codex Images backend endpoints.
+This is a backend component for the `hd-redraw-stitch` workflow. That workflow
+decides what to redraw and how to preserve the source; this skill's bundled CLI
+sends its GPT Image 2 requests through Codex OAuth and saves the returned image.
+Do not use it as a standalone generator for general image requests.
 
 ## When To Use
 
-- The user asks to use `gpt-image-2` or GPT Image through Codex auth/subscription.
-- The current agent supports `SKILL.md` but does not have a native image tool.
-- The user explicitly does not want to use `OPENAI_API_KEY`.
-- The user wants the same local image workflow across Codex, Claude Code, OpenClaw, Hermes Agent, or similar agents.
+- The `hd-redraw-stitch` workflow has already passed its keyword gate or been explicitly invoked, and needs GPT Image 2 requests through Codex OAuth.
+
+Do not select this helper directly for image requests or bypass the parent
+workflow's keyword gate. In particular, `高清重绘` alone does not activate this
+backend. New image generation, routine edits, and variants use Codex's built-in
+`imagegen`.
 
 Do not use this skill when the user wants the official OpenAI Images API, an OpenAI-compatible gateway, or API-key billing. This skill is deliberately Codex-OAuth-only.
 

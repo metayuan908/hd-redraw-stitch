@@ -1,0 +1,4 @@
+interface:
+  display_name: "高清重绘与拼接"
+  short_description: "按4K、分块或分区等指定关键词触发既有图像的保真重绘与拼接"
+  default_prompt: "用 $hd-redraw-stitch 将这张已有图片做4K高清重绘，保持构图和关键结构。"

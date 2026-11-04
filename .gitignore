@@ -1,9 +1,6 @@
 __pycache__/
-*.py[cod]
-.DS_Store
-.env
-.env.*
-auth.json
+*.pyc
 work/
 outputs/
-.venv/
+tmp/
+.DS_Store

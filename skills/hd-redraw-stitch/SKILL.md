@@ -1,9 +1,32 @@
 ---
-name: restore-image-hd
-description: Faithfully redraw raster images with GPT Image as mask-driven semantic regions or overlapping native-detail tiles and deliver exact HD, 2K, 4K, 8K, print, or custom-size outputs. Use for photos, connected products, people, architecture, textures, posters, packaging, scans, screenshots, or transparent assets when the user wants genuine generative reconstruction rather than ordinary upscaling. Run a conservative route gate first, use segmented Only Masked redraw for high-risk connected subjects and typography-heavy layouts, preserve alpha and sensitive text deterministically, and report GPT-native versus delivery dimensions.
+name: hd-redraw-stitch
+description: 既有图像的保真高清重绘与分块拼接。仅在图像处理请求包含“4k高清重绘”“4k”“分块”“分区高清重绘”“插件高清重绘”任一关键词时自动触发（4K 大小写不敏感），或用户显式选择本插件/调用 $hd-redraw-stitch。单独“高清重绘”不触发；普通生成和编辑使用 Codex 内置 imagegen。
 ---
 
-# Restore Image HD
+# HD Redraw & Stitch
+
+## Routing boundary
+
+Automatically select this workflow only when an image-processing request uses
+one of these keywords as a positive instruction:
+
+- `4k高清重绘`
+- `4k`
+- `分块`
+- `分区高清重绘`
+- `插件高清重绘`
+
+Match `4k` case-insensitively; `4K 高清重绘` also qualifies. Explicitly selecting
+the plugin or invoking `$hd-redraw-stitch` also selects this workflow.
+The phrase `高清重绘` alone does not select it. HD/2K/8K/print/custom-size
+requests without an allowed keyword or explicit invocation do not select it
+either. Do not broaden this gate to synonyms for restoration or enhancement.
+
+Apply the gate to the user's requested action, not quoted examples, questions
+about keywords, configuration discussions, or negated instructions. `4k` or
+`分块` in an unrelated task does not select an image workflow. Once selected,
+use an existing source image; obtain it if missing. New image generation and
+ordinary image edits use Codex's built-in `imagegen`.
 
 Create a redraw-first workflow. Do not use Real-ESRGAN, super-resolution models,
 face enhancers, or interpolation as a detail-generation route. Final high-resolution

@@ -1,4 +1,4 @@
 interface:
-  display_name: "Codex GPT Image"
-  short_description: "Generate or edit images through local Codex subscription auth"
-  default_prompt: "Use $codex-gpt-image to generate or edit an image with local Codex authentication."
+  display_name: "HD Redraw & Stitch backend"
+  short_description: "GPT Image 2 request backend for hd-redraw-stitch"
+  default_prompt: "Use $codex-gpt-image as the image backend for a hd-redraw-stitch job that has already passed its keyword gate or been explicitly invoked."
