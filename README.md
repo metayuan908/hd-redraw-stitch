@@ -5,7 +5,7 @@ GPT / Codex 高清放大、4K 高清重绘与分块拼接插件。通过语义�
 搜索关键词：GPT、Codex、高清放大、4K、高清重绘、分块拼接；image upscaling、HD image redraw、region redraw、tile stitching。
 
 作者：Yuanwei  
-版本：0.5.0+codex.20261104
+版本：0.5.1+codex.20261104
 
 ## 内容
 
@@ -59,6 +59,13 @@ python3 skills/hd-redraw-stitch/scripts/gpt_segmented_redraw.py --help
 
 交付图是 GPT 重绘并拼接的目标尺寸画布，不应称为单张模型原生 4K/8K。请保留每次原生生成尺寸、分块及拼接记录。脚本运行会发起图像生成请求，请先查看 dry-run 和风险预检结果。
 
+## v0.5.1：分块规划与进度
+
+- 按整张画布的网格数量选择分块尺寸，避免尾行高度重叠。本次 3840×1984 建筑图的默认方案由 12 块降为 8 块；实际画质仍须通过首块和成品检查。
+- 高风险建筑图缺少可用语义蒙版时，路线预检推荐全局构图锚点，保留高风险标记。已有语义蒙版可传 `--semantic-masks`。
+- 终端显示分块完成进度，任务目录的 `progress.json` 提供可读取的进度数据。单次模型请求没有后端百分比，运行期间只显示“生成中”和已完成块数。
+- `layout-plan.json` 记录网格、重叠和重复像素比例；`run.json` 记录请求、失败与续跑统计；`review-checklist.json` 提示需要人工核对的内容细节。
+
 本仓库从本地安装插件导出，移除了 Python 缓存，保留原始技能与脚本。未附加开源许可证。
 
 ## v0.5.0：名称与触发范围
@@ -84,4 +91,4 @@ python3 skills/hd-redraw-stitch/scripts/gpt_segmented_redraw.py --help
 python3 -m unittest discover -s tests -v
 ```
 
-21 项离线测试通过；真实服务端并发加速尚未实测，不据模拟测试承诺任务耗时。
+23 项离线测试通过；真实服务端并发加速尚未实测，不据模拟测试承诺任务耗时。

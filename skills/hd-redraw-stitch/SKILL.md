@@ -88,6 +88,16 @@ a continuous low-error path when a real narrow overlap exists. Irregular overlap
 are explicitly reported as feather fallback and still require visual review.
 Neither an edge score nor a clean seam proves semantic correctness.
 
+During generation, `progress.json` and the terminal bar show completed image
+requests for the current image, including verified cached requests on resume.
+For the coherent route, the global anchor is stage 1/2 and detail tiles are
+stage 2/2. A single GPT Image request has no backend percentage; its progress
+remains `null` while running. Do not describe tile completion as a precise
+percentage of the current model request. Review `layout-plan.json` before paid
+tile requests: it records grid size, minimum overlap and repeated pixel ratio.
+The planner minimizes the whole grid under the native pixel budget; a pilot
+still validates the actual returned dimensions.
+
 ## Portable runtime
 
 Resolve every script relative to this `SKILL.md`; never hardcode the source
@@ -122,8 +132,9 @@ the bundled Python executable.
    first; never stretch products, people, architecture, logos, or typography.
 4. Read `references/semantic-quality.md` for products, people, hands, and text.
 5. Run `scripts/plan_redraw_route.py` before any paid image request. Supply the
-   semantic flags found during inspection. Treat its route as a minimum safety
-   level; manually escalate risk, never downgrade it without evidence.
+   semantic flags found during inspection, including `--semantic-masks` only
+   when usable object masks exist. Preserve its risk rating; choose a route
+   with equivalent structural protection when a semantic route is impractical.
 
 ## Choose the redraw route
 
@@ -135,6 +146,10 @@ the bundled Python executable.
   `scripts/gpt_coherent_redraw.py`. It first redraws the complete image as a
   global structure anchor, then redraws smaller overlapping tiles against that
   anchor and core-stitches them.
+- **High-risk architecture without usable semantic masks:** use the global
+  anchor route with pilot tiles. A rectangular grid is not a semantic mask.
+  If a pilot fails geometry checks, inspect the failed region and the global
+  anchor before retrying; switch routes only with evidence from that review.
 - **Textures, backgrounds, scenery, and abstract images:** run
   `scripts/gpt_tile_redraw.py` directly. These tolerate independent local detail.
 - **Posters, packaging, UI, diagrams, QR codes, prices, and exact typography:**
@@ -145,6 +160,11 @@ Do not run structural content through unanchored independent tiles. Do not place
 a fixed grid boundary through a connected product merely because the overlaps
 look clean. A clean seam does not prove that a bevel, hand, limb, frame,
 perspective line, or assembly connection is coherent.
+After delivery, inspect `review-checklist.json` against source and result at
+100%. This is a pending human visual review, not an automatic fidelity pass.
+Use `request_metrics` in `run.json` together with tile `layout` metrics to
+compare later runs; retain two workers unless live limit and latency records
+support a change.
 
 ## Mask-driven segmented redraw
 

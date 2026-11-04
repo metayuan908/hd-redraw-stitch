@@ -5,11 +5,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import subprocess
 import sys
 import time
 from pathlib import Path
+from redraw_runtime import atomic_json
 
 try:
     from PIL import Image, ImageDraw, ImageFilter
@@ -68,16 +70,30 @@ def largest_model_size(width: int, height: int, pixel_budget: int = 1_500_000) -
 def default_tile_geometry(
     target_width: int, target_height: int, structural: bool, native_pixel_budget: int = 1_200_000
 ) -> tuple[int, int, int, int]:
-    # Near-square destination crops use the observed/conservative capacity well.
-    # Tile dimensions INCLUDE all overlap/context pixels sent for redraw.
+    # Search the complete grid, not only the area of one crop. A locally large
+    # crop can force an almost duplicate final row or column.
     budget = native_pixel_budget
     if target_width * target_height <= budget:
         return target_width, target_height, 0, 0
-    tile_width = min(target_width, max(16, int((budget * 1.2) ** .5) // 16 * 16))
-    tile_height = min(target_height, max(16, (budget // tile_width) // 16 * 16))
-    overlap_x = 0 if tile_width == target_width else min(128, tile_width // 8)
-    overlap_y = 0 if tile_height == target_height else min(128, tile_height // 8)
-    return tile_width,tile_height,overlap_x,overlap_y
+    best = None
+    max_width = min(target_width, budget // 16)
+    for width in range(16, max_width + 1, 16):
+        max_height = min(target_height, budget // width)
+        for height in range(16, max_height + 1, 16):
+            aspect_limit = 1.5 if structural else 3.0
+            if max(width, height) > aspect_limit * min(width, height):
+                continue
+            overlap_x = 0 if width == target_width else min(128, width // 8)
+            overlap_y = 0 if height == target_height else min(128, height // 8)
+            columns = 1 + math.ceil((target_width - width) / (width - overlap_x))
+            rows = 1 + math.ceil((target_height - height) / (height - overlap_y))
+            count = columns * rows
+            score = (count, count * width * height, abs(width - height))
+            if best is None or score < best[0]:
+                best = (score, (width, height, overlap_x, overlap_y))
+    if best is None:
+        raise SystemExit("No tile geometry fits the native pixel budget.")
+    return best[1]
 
 
 def axis_seams(tiles: list[dict], axis: str) -> list[int]:
@@ -580,11 +596,30 @@ def main() -> int:
             f"{args.max_tiles}. Increase the limit explicitly after reviewing cost and time."
         )
 
+    total_tile_pixels = sum(int(tile["width"]) * int(tile["height"]) for tile in tiles)
+    x_positions = sorted({int(tile["x"]) for tile in tiles})
+    y_positions = sorted({int(tile["y"]) for tile in tiles})
+    actual_overlap_x = [x_positions[i] + tile_width - x_positions[i + 1]
+                        for i in range(len(x_positions) - 1)]
+    actual_overlap_y = [y_positions[i] + tile_height - y_positions[i + 1]
+                        for i in range(len(y_positions) - 1)]
+    layout_plan = {"canvas": [target_width, target_height],
+                   "tile": [tile_width, tile_height],
+                   "grid": [len(x_positions), len(y_positions)],
+                   "tile_count": len(tiles),
+                   "minimum_overlap": [min(actual_overlap_x, default=0),
+                                       min(actual_overlap_y, default=0)],
+                   "repeated_pixel_ratio": round(total_tile_pixels / (target_width * target_height) - 1, 4),
+                   "planned_request_pixels": len(tiles) * request_width * request_height,
+                   "native_pixel_budget": budget}
+    atomic_json(work_dir / "layout-plan.json", layout_plan)
     print(
         f"Plan: {source_width}x{source_height} -> {target_width}x{target_height}; "
         f"content={args.content_mode}; {len(tiles)} tiles; "
         f"tile={tile_width}x{tile_height}; "
-        f"overlap={overlap_x}x{overlap_y}"
+        f"overlap={overlap_x}x{overlap_y}; "
+        f"grid={len(x_positions)}x{len(y_positions)}; "
+        f"repeated pixels={layout_plan['repeated_pixel_ratio']:.1%}"
     )
     if (request_width, request_height) != (tile_width, tile_height):
         print(
@@ -599,7 +634,7 @@ def main() -> int:
     # All routes share the same durable generation/QC engine. The tiler owns
     # geometry; the engine owns immutable crops, bounded workers and checkpoints.
     from PIL import ImageDraw
-    from redraw_runtime import runtime_flags, atomic_json
+    from redraw_runtime import runtime_flags
     region_masks = work_dir / "region-masks"
     region_masks.mkdir(parents=True, exist_ok=True)
     semantic_regions = []
@@ -664,7 +699,7 @@ def main() -> int:
                     gpt_request_dimensions=[request_width,request_height],
                     tile_native_dimensions=[{"file":r["name"],"native":r["native_dimensions"],
                                              "normalized":r["normalized_dimensions"]} for r in metadata["records"]],
-                    merge_mode=merge_mode)
+                    merge_mode=merge_mode, layout=layout_plan)
     atomic_json(work_dir / "run.json",metadata)
     return 0
 

@@ -56,6 +56,43 @@ class Journal:
             os.fsync(stream.fileno())
 
 
+class ProgressReporter:
+    """Report completed image requests; backend request internals are unknown."""
+
+    def __init__(self, directory, total, phase="generation"):
+        self.path = Path(directory) / "progress.json"
+        self.total = total
+        self.phase = phase
+        self.completed = set()
+        self.started = time.monotonic()
+        self.last_print = 0.0
+
+    def set_phase(self, phase, total):
+        self.phase, self.total = phase, total
+        self.completed.clear()
+        self.started = time.monotonic()
+        self.update("start", None, 0, total, 0)
+
+    def update(self, stage, job, _completed, _batch_total, active):
+        if stage in ("generated", "resumed") and job is not None:
+            self.completed.add(job)
+        count = len(self.completed)
+        percent = round(100 * count / self.total) if self.total else 100
+        elapsed = round(time.monotonic() - self.started, 1)
+        row = {"phase": self.phase, "state": stage, "completed": count,
+               "total": self.total, "percent": percent, "active_requests": active,
+               "current_request_percent": None, "elapsed_seconds": elapsed,
+               "updated_at": utc_now()}
+        atomic_json(self.path, row)
+        now = time.monotonic()
+        if stage != "waiting" or now - self.last_print >= 15:
+            filled = round(percent / 5)
+            bar = "█" * filled + "░" * (20 - filled)
+            print(f"{self.phase}: [{bar}] {count}/{self.total} ({percent}%) "
+                  f"active={active} elapsed={elapsed:.0f}s {stage}", flush=True)
+            self.last_print = now
+
+
 class JobLock:
     """One coordinator per work directory; OS releases the lock after a crash."""
     def __init__(self, directory):
@@ -90,7 +127,7 @@ def is_rate_limit(error):
 
 
 def run_jobs(jobs, generate, inspect, directory, *, workers=2, resume=False,
-             retries=1, retry_delay=2.0, reset_ids=()):
+             retries=1, retry_delay=2.0, reset_ids=(), on_progress=None):
     """Generate immutable jobs, checkpoint each, serialize dispatch after a 429.
 
     generate(job, new_raw_path) owns its unique output. inspect(raw, job) must
@@ -116,10 +153,14 @@ def run_jobs(jobs, generate, inspect, directory, *, workers=2, resume=False,
             inspect(raw, job)
             records[job["id"]] = {**record, "resumed": True}
             journal.event("resume", job=job["id"], signature=job["signature"])
+            if on_progress:
+                on_progress("resumed", job["id"], len(records), len(jobs), 0)
         else:
             pending.append((job, folder, 0))
 
     effective_workers, failure = workers, None
+    if on_progress:
+        on_progress("start", None, len(records), len(jobs), 0)
 
     def execute(job, folder, attempt):
         raw = folder / f"attempt-{time.time_ns()}.png"
@@ -163,12 +204,20 @@ def run_jobs(jobs, generate, inspect, directory, *, workers=2, resume=False,
                 active[executor.submit(execute, job, folder, attempt)] = (job, folder, attempt)
             if not active:
                 break
-            completed, _ = wait(active, return_when=FIRST_COMPLETED)
+            completed, _ = wait(active, timeout=5, return_when=FIRST_COMPLETED)
+            if not completed:
+                if on_progress:
+                    on_progress("waiting", None, len(records), len(jobs), len(active))
+                continue
             for future in completed:
                 job, folder, attempt = active.pop(future)
                 try:
                     records[job["id"]] = future.result()
+                    if on_progress:
+                        on_progress("generated", job["id"], len(records), len(jobs), len(active))
                 except Exception as error:
+                    if on_progress:
+                        on_progress("failed", job["id"], len(records), len(jobs), len(active))
                     if is_rate_limit(error) and attempt < retries and not failure:
                         effective_workers = 1
                         journal.event("concurrency_reduced", workers=1, reason="rate_limit")

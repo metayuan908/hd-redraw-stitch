@@ -20,6 +20,11 @@ class PipelineTests(unittest.TestCase):
   with tempfile.TemporaryDirectory() as d:
    p=self.fixture(d);r=self.command(p,'--pilot-count','0');self.assertEqual(r.returncode,0,r.stdout+r.stderr)
    before=(p/'out.png').read_bytes();run=json.loads((p/'run/run.json').read_text())
+   progress=json.loads((p/'run/progress.json').read_text())
+   self.assertEqual((progress['completed'],progress['total'],progress['percent']),(2,2,100))
+   self.assertIsNone(progress['current_request_percent'])
+   self.assertEqual(run['request_metrics']['requests_started'],2)
+   self.assertEqual(json.loads((p/'run/review-checklist.json').read_text())['state'],'pending_visual_review')
    self.assertTrue(run['immutable_generation_inputs']);self.assertEqual([r['name'] for r in run['records']],['east','west'])
    self.assertEqual(len((p/'calls.jsonl').read_text().splitlines()),2)
    r=self.command(p,'--pilot-count','0','--resume');self.assertEqual(r.returncode,0,r.stdout+r.stderr)

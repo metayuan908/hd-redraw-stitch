@@ -11,7 +11,7 @@ import sys
 import time
 from pathlib import Path
 
-from redraw_runtime import (Journal, JobLock, add_runtime_arguments, atomic_json,
+from redraw_runtime import (Journal, JobLock, ProgressReporter, add_runtime_arguments, atomic_json,
                             file_hash, native_budget, run_jobs, save_capacity,
                             scoped_profile, signature, utc_now)
 from redraw_quality import (align_donor, alignment_valid_mask, inspect_native,
@@ -733,6 +733,7 @@ def main() -> int:
     jobs = []
     item_by_id = {}
     generation_dispatch_seconds = 0.0
+    progress = None
     context_digest = file_hash(context_image) if context_image else None
     processing_signature = signature({key: getattr(args, key) for key in (
         "alignment", "max_shift", "max_edge_distance", "seam_mode", "mask_feather",
@@ -786,7 +787,8 @@ def main() -> int:
         started = time.monotonic()
         try:
             resets={job["id"] for job in selected if job["id"] in args.retry_region or item_by_id[job["id"]]["region"]["name"] in args.retry_region}
-            return run_jobs(selected, generate, inspect, work_dir, retries=args.retries,reset_ids=resets, **options)
+            return run_jobs(selected, generate, inspect, work_dir, retries=args.retries,
+                            reset_ids=resets, on_progress=progress.update, **options)
         except RuntimeError:
             # An undersized return is still evidence about actual capacity.
             observed = []
@@ -866,7 +868,11 @@ def main() -> int:
             try:
                 donor, row = process(job, record)
             except RuntimeError as error:
-                failures.append({"job":job["id"],"bbox":item["bbox"],"reason":str(error),"state":"quality_failed"})
+                next_action = ("Review a global-anchor route before more grid requests"
+                               if item["region"].get("mode") == "architecture" and not context_image
+                               else "Retry this complete region with --resume --retry-region")
+                failures.append({"job":job["id"],"bbox":item["bbox"],"reason":str(error),
+                                 "state":"quality_failed","next_action":next_action})
                 journal.event("quality_failed", **failures[-1])
                 continue
             edit = item["edit"]
@@ -900,6 +906,7 @@ def main() -> int:
         atomic_json(work_dir / "status.json", {"state":"preparing", "started_at":utc_now()})
         atomic_json(work_dir / "plan.json",plan)
         jobs = prepare_jobs(prepared, baseline, "interior")
+        progress = ProgressReporter(work_dir, len(jobs), "image_generation")
         valid_region_ids={job["id"] for job in jobs}|{str(item["region"]["name"]) for item in prepared}
         if set(args.retry_region)-valid_region_ids:
             raise RuntimeError("Unknown --retry-region; use a name/job ID from prepared-jobs.json")
@@ -956,6 +963,7 @@ def main() -> int:
             print("Generation checkpoint complete. Use --stage compose --resume for offline assembly.")
             return 0
         compose_begin = time.monotonic()
+        progress.update("composing", None, 0, len(jobs), 0)
         generation_before_composition = generation_dispatch_seconds
         records = compose_items(jobs, raw_records, canvas)
         if args.edge_pass:
@@ -976,6 +984,7 @@ def main() -> int:
                     edge_items.append({**item,"edit":ring,"bbox":box,"crop_size":size,
                                        "request_size":largest_model_size(*size,pixel_budget=max(1_500_000,budget)),"pass":"edge"})
             edge_jobs = prepare_jobs(edge_items,edge_anchor,"edge")
+            progress.set_phase("edge_generation", len(edge_jobs))
             edge_records = dispatch(edge_jobs, workers=args.jobs, resume=effective_resume)
             records += compose_items(edge_jobs,edge_records,canvas)
         output.parent.mkdir(parents=True, exist_ok=True)
@@ -1003,8 +1012,30 @@ def main() -> int:
                "composition_wall_seconds":time.monotonic()-compose_begin-(generation_dispatch_seconds-generation_before_composition),
                "wall_seconds":time.monotonic()-wall_started,"finished_at":utc_now(),
                "detail_upscaler_used":False,"pipeline":"immutable masked crops -> bounded generation queue -> geometry QC -> color -> ordered seam composite"}
+        event_rows = [json.loads(line) for line in (work_dir / "events.jsonl").read_text().splitlines()]
+        run["request_metrics"] = {
+            "scope":"work_directory_cumulative",
+            "requests_started":sum(row.get("stage")=="generate_start" for row in event_rows),
+            "requests_failed":sum(row.get("stage")=="generate_failed" for row in event_rows),
+            "retries":sum(row.get("stage")=="generate_start" and row.get("attempt",1)>1 for row in event_rows),
+            "cached_resumes":sum(row.get("stage")=="resume" for row in event_rows),
+            "quality_failures":sum(row.get("stage")=="quality_failed" for row in event_rows),
+        }
+        modes = {item["region"].get("mode", "general") for item in prepared}
+        checks = ["Compare source and result at 100% for object count, crop and composition",
+                  "Inspect seams and repeated details at full resolution"]
+        if "architecture" in modes:
+            checks += ["Inspect straight lines, perspective and structural joints",
+                       "Inspect repeated panels, windows, vehicles and people for duplication or loss"]
+        if "people" in modes:
+            checks += ["Inspect identities, hands, limbs, clothing and contact points"]
+        if modes & {"poster", "packaging", "text", "ui", "diagram"}:
+            checks += ["Verify typography, logos, numbers and codes against the source"]
+        atomic_json(work_dir / "review-checklist.json", {"state":"pending_visual_review",
+                                                   "content_modes":sorted(modes),"checks":checks})
         atomic_json(work_dir / "run.json",run)
         atomic_json(work_dir / "status.json", {"state":"completed", "output_sha256":run["output_sha256"]})
+        progress.update("completed", None, 0, progress.total, 0)
         journal.event("delivery_complete", output=str(output),wall_seconds=run["wall_seconds"])
         print(f"Completed segmented GPT redraw: {output}")
         return 0

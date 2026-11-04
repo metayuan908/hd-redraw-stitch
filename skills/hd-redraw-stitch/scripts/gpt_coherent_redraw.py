@@ -273,7 +273,7 @@ def main() -> int:
             raise SystemExit(f"Codex OAuth check failed: {exc}") from exc
         if auth.stdout.strip():
             print(auth.stdout.strip())
-        from redraw_runtime import run_jobs, signature, file_hash, scoped_profile
+        from redraw_runtime import ProgressReporter, run_jobs, signature, file_hash, scoped_profile
         from redraw_quality import inspect_native
         scope=scoped_profile(gpt_cli,args.quality,include_auth=False)
         anchor_job={"id":"global-anchor","signature":signature({"source":file_hash(source),
@@ -293,10 +293,13 @@ def main() -> int:
                 raise RuntimeError("Global anchor aspect drift exceeds limit")
             return result
         from redraw_runtime import JobLock
+        print("Stage 1/2: global structure anchor", flush=True)
+        anchor_progress = ProgressReporter(work_dir, 1, "global_anchor")
         with JobLock(work_dir):
             anchor_records=run_jobs([anchor_job],generate_anchor,inspect_anchor,work_dir,
                                     workers=1,resume=args.resume,retries=args.retries,
-                                    reset_ids={"global-anchor"} if "global-anchor" in args.retry_region else set())
+                                    reset_ids={"global-anchor"} if "global-anchor" in args.retry_region else set(),
+                                    on_progress=anchor_progress.update)
         anchor_raw=Path(anchor_records[0]["raw_path"])
         native_width, native_height, cropped = crop_anchor_to_ratio(
             anchor_raw, target_ratio, anchor, args.max_anchor_aspect_drift)
@@ -349,7 +352,47 @@ def main() -> int:
         tile_command.append("--force-output")
     if args.allow_aspect_change:
         tile_command.append("--allow-aspect-change")
-    completed=subprocess.run(tile_command,env=environment)
+    print("Stage 2/2: native-detail tiles", flush=True)
+    if args.dry_run:
+        completed = subprocess.run(tile_command, env=environment)
+    else:
+        from redraw_runtime import atomic_json, utc_now
+        child = subprocess.Popen(tile_command, env=environment)
+        last_progress = None
+        while child.poll() is None:
+            layout_path = tile_work_dir / "layout-plan.json"
+            detail_path = tile_work_dir / "engine/progress.json"
+            if layout_path.is_file():
+                layout = json.loads(layout_path.read_text())
+                detail = json.loads(detail_path.read_text()) if detail_path.is_file() else {}
+                total = 1 + layout["tile_count"]
+                done = 1 + detail.get("completed", 0)
+                current = {"phase": "detail_tiles", "state": detail.get("state", "planning"),
+                           "completed": done, "total": total,
+                           "percent": round(100 * done / total),
+                           "active_requests": detail.get("active_requests", 0),
+                           "current_request_percent": None, "updated_at": utc_now()}
+                if current["completed"] != last_progress:
+                    atomic_json(work_dir / "progress.json", current)
+                    last_progress = current["completed"]
+            time.sleep(1)
+        completed = child
+        layout_path = tile_work_dir / "layout-plan.json"
+        detail_path = tile_work_dir / "engine/progress.json"
+        if layout_path.is_file():
+            layout = json.loads(layout_path.read_text())
+            detail = json.loads(detail_path.read_text()) if detail_path.is_file() else {}
+            child_status_path = tile_work_dir / "status.json"
+            child_status = json.loads(child_status_path.read_text()) if child_status_path.is_file() else {}
+            total = 1 + layout["tile_count"]
+            done = 1 + detail.get("completed", 0)
+            state = ("completed" if child.returncode == 0 and done == total
+                     else child_status.get("state", "failed" if child.returncode else "stopped"))
+            atomic_json(work_dir / "progress.json", {
+                "phase": "complete" if state == "completed" else "detail_tiles",
+                "state": state,
+                "completed": done, "total": total, "percent": round(100 * done / total),
+                "active_requests": 0, "current_request_percent": None, "updated_at": utc_now()})
     if completed.returncode:
         raise SystemExit(completed.returncode)
     if args.dry_run:

@@ -58,6 +58,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--target-height", type=int)
     parser.add_argument("--connected-subjects", action="store_true")
     parser.add_argument("--precise-geometry", action="store_true")
+    parser.add_argument("--semantic-masks", action="store_true",
+                        help="Usable object/structure masks are already available.")
     parser.add_argument("--has-text", action="store_true")
     parser.add_argument("--sensitive-text", action="store_true")
     parser.add_argument(
@@ -127,7 +129,11 @@ def main() -> int:
         score += 1
         reasons.append("source alpha must be preserved deterministically: +1")
 
-    if score >= 5:
+    architecture_without_masks = (args.content_mode == "architecture"
+                                  and not args.semantic_masks
+                                  and not args.sensitive_text
+                                  and not args.background_only)
+    if score >= 5 and not architecture_without_masks:
         risk = "high"
         route = "segmented"
         command = "gpt_segmented_redraw.py"
@@ -137,6 +143,9 @@ def main() -> int:
         route = "coherent"
         command = "gpt_coherent_redraw.py"
         pilot_count = 2 if args.connected_subjects else 1
+        if architecture_without_masks and score >= 5:
+            risk = "high"
+            reasons.append("high-risk architecture without semantic masks: use global anchor and pilot tiles")
     else:
         risk = "low"
         route = "direct-tiles"
