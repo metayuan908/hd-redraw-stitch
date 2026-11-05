@@ -84,8 +84,10 @@ Nonlinear flow is not a default restoration step: it can bend architectural
 lines. Alignment precedes color matching. Large edge mismatch, missing border
 coverage or excessive boundary change goes to `quality-report.json` and blocks
 export; redraw only failed complete regions. `--seam-mode minimum-error` chooses
-a continuous low-error path when a real narrow overlap exists. Irregular overlaps
-are explicitly reported as feather fallback and still require visual review.
+continuous low-error paths in rectangular tile overlaps, including joined L-shaped
+corners. Wider overlaps search only the 256 pixels nearest fresh content; older
+tiles retain the farther area. Unsupported irregular masks are reported as
+feather fallback and still require visual review.
 Neither an edge score nor a clean seam proves semantic correctness.
 
 During generation, `progress.json` and the terminal bar show completed image

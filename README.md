@@ -81,7 +81,7 @@ python3 skills/hd-redraw-stitch/scripts/gpt_segmented_redraw.py --help
 - 原生文件保留不变；逐块记录输入哈希、状态与耗时，续跑只复用匹配结果。
 - 明确请求不透明细节图，拒绝异常透明结果，原始透明通道单独恢复。
 - 在颜色匹配前进行受限几何检查；大幅错位阻止导出，并支持仅重绘失败区域。
-- 支持真实重叠区的低差异接缝选择；复杂重叠回退会明确记录，仍需视觉检查。
+- 支持矩形分块的低差异接缝选择，包括 L 形交叠的角部连接；过宽交叠仅在靠近新增内容的 256 像素内选线。其他复杂遮罩回退会明确记录，仍需视觉检查。
 
 分区流程可用 `--stage prepare|generate|compose|all` 分开执行。试绘后检查 `pilot-composite.png`，再使用 `--resume --approve-pilot`。失败区域使用 `--resume --retry-region NAME`。可选的 `--alignment affine` 需要另行安装 `opencv-python-headless`；默认平移校正不需要 OpenCV。
 
