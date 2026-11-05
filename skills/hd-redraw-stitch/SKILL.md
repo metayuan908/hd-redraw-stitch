@@ -88,6 +88,10 @@ continuous low-error paths in rectangular tile overlaps, including joined L-shap
 corners. Wider overlaps search only the 256 pixels nearest fresh content; older
 tiles retain the farther area. Unsupported irregular masks are reported as
 feather fallback and still require visual review.
+On substantial near-white backgrounds, silhouette QA also rejects compact new
+foreground protrusions beyond a 10-pixel source tolerance. It records the
+offending 32-pixel window for targeted inspection and retry. Other backgrounds
+still require explicit visual silhouette review.
 Neither an edge score nor a clean seam proves semantic correctness.
 
 During generation, `progress.json` and the terminal bar show completed image

@@ -6,7 +6,7 @@ sys.path.insert(0,str(ROOT/'skills/hd-redraw-stitch/scripts'))
 from PIL import Image,ImageChops,ImageDraw
 import numpy as np
 from redraw_runtime import run_jobs,signature,file_hash,JobLock,native_budget,save_capacity
-from redraw_quality import inspect_native,normalize_native,align_donor,minimum_error_selector
+from redraw_quality import inspect_native,normalize_native,align_donor,minimum_error_selector,foreground_overreach
 from gpt_segmented_redraw import composite_region
 
 class RuntimeTests(unittest.TestCase):
@@ -95,6 +95,14 @@ class QualityTests(unittest.TestCase):
  def test_large_shift_rejected(self):
   base=self.pattern();donor=base.transform(base.size,Image.Transform.AFFINE,(1,0,-40,0,1,0))
   with self.assertRaisesRegex(RuntimeError,'exceeds'):align_donor(base,donor,'translation',10,5)
+ def test_white_background_spike_is_detected_but_small_edge_shift_is_not(self):
+  base=Image.new('RGB',(160,160),'white');ImageDraw.Draw(base).ellipse((35,35,125,125),fill='blue')
+  shifted=Image.new('RGB',(160,160),'white');ImageDraw.Draw(shifted).ellipse((38,35,128,125),fill='blue')
+  self.assertEqual(foreground_overreach(base,shifted)['max_window_pixels'],0)
+  spike=base.copy();ImageDraw.Draw(spike).rectangle((120,72,145,77),fill='blue')
+  self.assertGreaterEqual(foreground_overreach(base,spike)['max_window_pixels'],24)
+  protected=Image.new('L',base.size,0)
+  self.assertEqual(foreground_overreach(base,spike,protected)['max_window_pixels'],0)
  def test_mask_protection_is_exact_after_feather(self):
   base=Image.new('RGB',(100,100),'red');mask=Image.new('L',(100,100));ImageDraw.Draw(mask).rectangle((20,20,80,80),fill=255)
   composite_region(base,Image.new('RGB',(100,100),'blue'),mask,(0,0,100,100),10)

@@ -14,7 +14,7 @@ from pathlib import Path
 from redraw_runtime import (Journal, JobLock, ProgressReporter, add_runtime_arguments, atomic_json,
                             file_hash, native_budget, run_jobs, save_capacity,
                             scoped_profile, signature, utc_now)
-from redraw_quality import (align_donor, alignment_valid_mask, inspect_native,
+from redraw_quality import (align_donor, alignment_valid_mask, foreground_overreach, inspect_native,
                             minimum_error_selector, normalize_native)
 
 try:
@@ -735,11 +735,11 @@ def main() -> int:
     generation_dispatch_seconds = 0.0
     progress = None
     context_digest = file_hash(context_image) if context_image else None
-    processing_signature = signature({key: getattr(args, key) for key in (
+    processing_signature = signature({"quality_revision": 2, **{key: getattr(args, key) for key in (
         "alignment", "max_shift", "max_edge_distance", "seam_mode", "mask_feather",
         "boundary_ring", "max_boundary_delta", "no_color_harmonization",
         "color_blur_radius", "color_luma_limit", "color_chroma_limit",
-        "detail_blur_radius", "detail_strength", "detail_limit")})
+        "detail_blur_radius", "detail_strength", "detail_limit")}})
 
     def prepare_jobs(items, anchor, pass_name):
         result = []
@@ -842,6 +842,11 @@ def main() -> int:
         elif not args.no_color_harmonization:
             donor, color_report = harmonize_donor(base_crop, donor, args.color_blur_radius,
                                                   args.color_luma_limit, args.color_chroma_limit)
+        silhouette = foreground_overreach(base_crop, donor, edit_crop)
+        if silhouette.get("max_window_pixels", 0) >= 24:
+            raise RuntimeError(f"{job['id']}: foreground protrusion on white background "
+                               f"({silhouette['max_window_pixels']} pixels in a 32px window "
+                               f"at {silhouette['window_bbox']}); inspect silhouette and retry region")
         delta = boundary_delta(base_crop, donor, edit_crop, int(item["region"].get("boundary_ring",args.boundary_ring)))
         if delta > args.max_boundary_delta:
             raise RuntimeError(f"{job['id']}: boundary delta {delta:.3f} exceeds {args.max_boundary_delta:.3f}")
@@ -852,7 +857,8 @@ def main() -> int:
                "raw_donor": raw_record["raw_path"], "normalized_donor": str(folder / "normalized.png"),
                "processed_path": str(processed), "processed_sha256": file_hash(processed),
                "state": "accepted", "accepted": True, "boundary_delta": delta,
-               "geometry": geometry, "geometry_seconds": geometry_seconds,
+               "geometry": geometry, "silhouette": silhouette,
+               "geometry_seconds": geometry_seconds,
                "processing_seconds": time.monotonic()-begin, "color_harmonization": color_report,
                "detail_transfer": detail_report}
         atomic_json(acceptance, row)

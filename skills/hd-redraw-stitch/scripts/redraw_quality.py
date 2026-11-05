@@ -83,6 +83,45 @@ def edge_distance(base, donor):
     return {"p95_pixels": float(np.percentile(distance[a], 95) / scale), "informative": True}
 
 
+def foreground_overreach(base, donor, edit=None, tolerance=10, window=32):
+    """Find compact new foreground protrusions on a near-white source backdrop.
+
+    A p95 edge score can miss a small, conspicuous spike. This conservative
+    check runs only when the source crop has substantial near-white background.
+    It reports new dark/colored pixels outside the source silhouette plus a
+    bounded tolerance; it does not alter either image.
+    """
+    source = np.asarray(base.convert("RGB"))
+    result = np.asarray(donor.convert("RGB"))
+    if source.shape != result.shape:
+        raise ValueError("Silhouette QA needs equal image dimensions")
+    background_fraction = float(np.all(source >= 245, axis=2).mean())
+    if background_fraction < .20:
+        return {"applicable": False, "reason": "no substantial white background"}
+    source_subject = np.any(source < 225, axis=2)
+    donor_subject = np.any(result < 225, axis=2)
+    dilated = np.asarray(Image.fromarray(source_subject.astype(np.uint8)*255)
+                         .filter(ImageFilter.MaxFilter(2*tolerance+1))) > 0
+    extra = donor_subject & ~dilated
+    if edit is not None:
+        extra &= np.asarray(edit.convert("L")) > 127
+    ys, xs = np.where(extra)
+    if not len(xs):
+        return {"applicable": True, "total_outside_pixels": 0,
+                "max_window_pixels": 0, "window_bbox": None}
+    x0, x1 = max(0, int(xs.min())-window), min(extra.shape[1], int(xs.max())+window+1)
+    y0, y1 = max(0, int(ys.min())-window), min(extra.shape[0], int(ys.max())+window+1)
+    roi = np.pad(extra[y0:y1, x0:x1].astype(np.int32),
+                 ((0, max(0, window-(y1-y0))), (0, max(0, window-(x1-x0)))))
+    sums = np.pad(roi, ((1, 0), (1, 0))).cumsum(0).cumsum(1)
+    counts = sums[window:, window:] - sums[:-window, window:] - sums[window:, :-window] + sums[:-window, :-window]
+    by, bx = np.unravel_index(np.argmax(counts), counts.shape)
+    return {"applicable": True, "total_outside_pixels": int(len(xs)),
+            "max_window_pixels": int(counts[by, bx]),
+            "window_bbox": [int(x0+bx), int(y0+by),
+                            int(x0+bx+window), int(y0+by+window)]}
+
+
 def align_donor(base, donor, mode="translation", max_shift=24.0, max_edge_distance=5.0):
     before = edge_distance(base, donor)
     report = {"mode": mode, "before": before, "applied": False}
