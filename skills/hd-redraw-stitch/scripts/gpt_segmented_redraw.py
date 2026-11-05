@@ -15,7 +15,8 @@ from redraw_runtime import (Journal, JobLock, ProgressReporter, add_runtime_argu
                             file_hash, native_budget, run_jobs, save_capacity,
                             scoped_profile, signature, utc_now)
 from redraw_quality import (align_donor, alignment_valid_mask, foreground_overreach, inspect_native,
-                            minimum_error_selector, normalize_native)
+                            minimum_error_selector, normalize_native, preserve_source_silhouette,
+                            source_guided_overlap_selector)
 
 try:
     from PIL import Image, ImageChops, ImageFilter, ImageStat
@@ -735,7 +736,7 @@ def main() -> int:
     generation_dispatch_seconds = 0.0
     progress = None
     context_digest = file_hash(context_image) if context_image else None
-    processing_signature = signature({"quality_revision": 2, **{key: getattr(args, key) for key in (
+    processing_signature = signature({"quality_revision": 3, **{key: getattr(args, key) for key in (
         "alignment", "max_shift", "max_edge_distance", "seam_mode", "mask_feather",
         "boundary_ring", "max_boundary_delta", "no_color_harmonization",
         "color_blur_radius", "color_luma_limit", "color_chroma_limit",
@@ -844,7 +845,7 @@ def main() -> int:
                                                   args.color_luma_limit, args.color_chroma_limit)
         silhouette = foreground_overreach(base_crop, donor, edit_crop)
         if silhouette.get("max_window_pixels", 0) >= 24:
-            raise RuntimeError(f"{job['id']}: foreground protrusion on white background "
+            raise RuntimeError(f"{job['id']}: foreground protrusion on uniform background "
                                f"({silhouette['max_window_pixels']} pixels in a 32px window "
                                f"at {silhouette['window_bbox']}); inspect silhouette and retry region")
         delta = boundary_delta(base_crop, donor, edit_crop, int(item["region"].get("boundary_ring",args.boundary_ring)))
@@ -885,14 +886,18 @@ def main() -> int:
             box = item["bbox"]
             selector = edit.crop(box)
             seam = {"used": False, "reason": "feather mode"}
+            source_guided = {"applicable": False, "reason": "feather mode"}
             if args.seam_mode == "minimum-error":
                 selector, seam = minimum_error_selector(target.crop(box), donor, selector, coverage.crop(box))
+                selector, source_guided = source_guided_overlap_selector(
+                    baseline.crop(box), target.crop(box), donor, selector,
+                    edit.crop(box), coverage.crop(box))
             feather = int(item["region"].get("edge_feather" if item.get("pass")=="edge" else "feather",args.mask_feather))
             if feather:
                 selector = ImageChops.darker(selector.filter(ImageFilter.GaussianBlur(feather)), edit.crop(box))
             target.paste(Image.composite(donor, target.crop(box), selector), box[:2])
             coverage = ImageChops.lighter(coverage, edit)
-            rows.append({**row, "seam": seam})
+            rows.append({**row, "seam": seam, "source_guided_overlap": source_guided})
             atomic_json(work_dir / "composition-checkpoint.json", {"state": "partial", "records": rows})
         atomic_json(work_dir / "quality-report.json", {"passed":len(rows),"failures":failures})
         if failures:
@@ -947,6 +952,8 @@ def main() -> int:
         if pilot_jobs:
             preview = baseline.copy()
             compose_items(pilot_jobs, pilot_records, preview)
+            if source_alpha is None:
+                preview, _ = preserve_source_silhouette(baseline, preview)
             if source_alpha is not None:
                 preview=preview.convert("RGBA")
                 preview.putalpha(source_alpha)
@@ -993,6 +1000,9 @@ def main() -> int:
             progress.set_phase("edge_generation", len(edge_jobs))
             edge_records = dispatch(edge_jobs, workers=args.jobs, resume=effective_resume)
             records += compose_items(edge_jobs,edge_records,canvas)
+        silhouette_lock = {"applied": False, "reason": "transparent source"}
+        if source_alpha is None:
+            canvas, silhouette_lock = preserve_source_silhouette(baseline, canvas)
         output.parent.mkdir(parents=True, exist_ok=True)
         if source_alpha is not None:
             result = canvas.convert("RGBA")
@@ -1017,7 +1027,8 @@ def main() -> int:
                "generation_and_pilot_wall_seconds":generation_wall,
                "composition_wall_seconds":time.monotonic()-compose_begin-(generation_dispatch_seconds-generation_before_composition),
                "wall_seconds":time.monotonic()-wall_started,"finished_at":utc_now(),
-               "detail_upscaler_used":False,"pipeline":"immutable masked crops -> bounded generation queue -> geometry QC -> color -> ordered seam composite"}
+               "detail_upscaler_used":False,"source_silhouette_lock":silhouette_lock,
+               "pipeline":"immutable masked crops -> bounded generation queue -> geometry QC -> color -> ordered seam composite -> optional flat-background silhouette lock"}
         event_rows = [json.loads(line) for line in (work_dir / "events.jsonl").read_text().splitlines()]
         run["request_metrics"] = {
             "scope":"work_directory_cumulative",

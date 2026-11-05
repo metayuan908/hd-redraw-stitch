@@ -1,6 +1,6 @@
 {
   "name": "hd-redraw-stitch",
-  "version": "0.5.3+codex.20261105",
+  "version": "0.5.4+codex.20261105",
   "description": "GPT / Codex 高清放大、4K 高清重绘与分块拼接。仅在图像处理请求含 4k高清重绘、4k、分块、分区高清重绘、插件高清重绘任一关键词时自动触发；单独“高清重绘”不触发。HD Redraw & Stitch generatively reconstructs existing images.",
   "author": {
     "name": "Yuanwei"

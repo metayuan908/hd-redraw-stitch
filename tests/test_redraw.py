@@ -6,7 +6,7 @@ sys.path.insert(0,str(ROOT/'skills/hd-redraw-stitch/scripts'))
 from PIL import Image,ImageChops,ImageDraw
 import numpy as np
 from redraw_runtime import run_jobs,signature,file_hash,JobLock,native_budget,save_capacity
-from redraw_quality import inspect_native,normalize_native,align_donor,minimum_error_selector,foreground_overreach
+from redraw_quality import inspect_native,normalize_native,align_donor,minimum_error_selector,flat_background_color,foreground_overreach,source_guided_overlap_selector,preserve_source_silhouette
 from gpt_segmented_redraw import composite_region
 
 class RuntimeTests(unittest.TestCase):
@@ -103,6 +103,55 @@ class QualityTests(unittest.TestCase):
   self.assertGreaterEqual(foreground_overreach(base,spike)['max_window_pixels'],24)
   protected=Image.new('L',base.size,0)
   self.assertEqual(foreground_overreach(base,spike,protected)['max_window_pixels'],0)
+ def test_overlap_uses_source_silhouette_when_tiles_disagree(self):
+  size=(80,80);source=Image.new('RGB',size,'white');d=ImageDraw.Draw(source)
+  d.rectangle((20,20,60,60),fill='blue')
+  old=source.copy();ImageDraw.Draw(old).rectangle((30,30,35,35),fill='white')
+  new=source.copy();ImageDraw.Draw(new).rectangle((65,20,70,25),fill='blue')
+  selector=Image.new('L',size,0);edit=Image.new('L',size,255);coverage=Image.new('L',size,255)
+  result,report=source_guided_overlap_selector(source,old,new,selector,edit,coverage)
+  self.assertTrue(report['applicable']);self.assertEqual(result.getpixel((32,32)),255)
+  self.assertEqual(result.getpixel((67,22)),0)
+ def test_saturated_white_background_keeps_source_outline(self):
+  source=Image.new('RGB',(160,160),'white');ImageDraw.Draw(source).ellipse((25,25,135,135),fill='blue')
+  donor=Image.new('RGB',(160,160),'white');ImageDraw.Draw(donor).ellipse((20,20,140,140),fill='cyan')
+  merged,report=preserve_source_silhouette(source,donor)
+  self.assertTrue(report['applied'])
+  self.assertEqual(merged.getpixel((15,80)),(255,255,255))
+  self.assertEqual(merged.getpixel((80,80)),(0,255,255))
+ def test_uniform_background_repairs_are_color_independent(self):
+  for backdrop,subject,redraw in [((32,32,32),(70,180,240),(40,220,240)),
+                                   ((130,130,130),(20,60,210),(30,190,230)),
+                                   ((210,165,70),(25,45,145),(40,110,210))]:
+   with self.subTest(backdrop=backdrop):
+    source=Image.new('RGB',(160,160),backdrop)
+    ImageDraw.Draw(source).ellipse((25,25,135,135),fill=subject)
+    self.assertIsNotNone(flat_background_color(source))
+    donor=Image.new('RGB',(160,160),backdrop)
+    ImageDraw.Draw(donor).ellipse((20,20,140,140),fill=redraw)
+    ImageDraw.Draw(donor).rectangle((135,77,155,83),fill=redraw)
+    self.assertGreaterEqual(foreground_overreach(source,donor)['max_window_pixels'],24)
+    merged,report=preserve_source_silhouette(source,donor)
+    self.assertTrue(report['applied'])
+    self.assertEqual(merged.getpixel((145,80)),backdrop)
+    self.assertEqual(merged.getpixel((80,80)),redraw)
+    old=source.copy();ImageDraw.Draw(old).rectangle((75,75,85,85),fill=backdrop)
+    new=source.copy();ImageDraw.Draw(new).rectangle((145,75,155,85),fill=subject)
+    selected,report=source_guided_overlap_selector(source,old,new,Image.new('L',source.size,0),
+                                                    Image.new('L',source.size,255),Image.new('L',source.size,255))
+    self.assertTrue(report['applicable'])
+    self.assertEqual(selected.getpixel((80,80)),255)
+    self.assertEqual(selected.getpixel((150,80)),0)
+ def test_gradient_background_skips_silhouette_lock(self):
+  gradient=np.zeros((160,160,3),dtype=np.uint8)
+  gradient[:]=np.linspace(0,255,160,dtype=np.uint8)[None,:,None]
+  source=Image.fromarray(gradient)
+  donor=source.copy();ImageDraw.Draw(donor).rectangle((20,20,60,60),fill='blue')
+  self.assertIsNone(flat_background_color(source))
+  self.assertFalse(foreground_overreach(source,donor)['applicable'])
+  merged,report=preserve_source_silhouette(source,donor)
+  self.assertFalse(report['applied'])
+  self.assertIs(merged,donor)
  def test_mask_protection_is_exact_after_feather(self):
   base=Image.new('RGB',(100,100),'red');mask=Image.new('L',(100,100));ImageDraw.Draw(mask).rectangle((20,20,80,80),fill=255)
   composite_region(base,Image.new('RGB',(100,100),'blue'),mask,(0,0,100,100),10)

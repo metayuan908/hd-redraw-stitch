@@ -82,7 +82,7 @@ python3 skills/hd-redraw-stitch/scripts/gpt_segmented_redraw.py --help
 - 明确请求不透明细节图，拒绝异常透明结果，原始透明通道单独恢复。
 - 在颜色匹配前进行受限几何检查；大幅错位阻止导出，并支持仅重绘失败区域。
 - 支持矩形分块的低差异接缝选择，包括 L 形交叠的角部连接；过宽交叠仅在靠近新增内容的 256 像素内选线。其他复杂遮罩回退会明确记录，仍需视觉检查。
-- 对大面积白底图增加轮廓越界检查：小面积亮边或彩色突起即使未触发整体边缘偏移阈值，也会阻止导出并定位失败分块。非白底仍需人工复核轮廓。
+- 对占主导的均匀背景增加轮廓越界检查：白、灰、深色和彩色纯底都可检测小面积突起并定位失败分块。重叠块若发生明确的前景/背景冲突，以原图轮廓选择；最终保留原图背景与约 4 像素轮廓边缘，重绘细节仍来自内部块。渐变、复杂纹理或过细主体无法可靠判断时跳过此保护，仍需人工复核。
 
 分区流程可用 `--stage prepare|generate|compose|all` 分开执行。试绘后检查 `pilot-composite.png`，再使用 `--resume --approve-pilot`。失败区域使用 `--resume --retry-region NAME`。可选的 `--alignment affine` 需要另行安装 `opencv-python-headless`；默认平移校正不需要 OpenCV。
 
@@ -92,4 +92,4 @@ python3 skills/hd-redraw-stitch/scripts/gpt_segmented_redraw.py --help
 python3 -m unittest discover -s tests -v
 ```
 
-23 项离线测试通过；真实服务端并发加速尚未实测，不据模拟测试承诺任务耗时。
+30 项离线测试通过；真实服务端并发加速尚未实测，不据模拟测试承诺任务耗时。

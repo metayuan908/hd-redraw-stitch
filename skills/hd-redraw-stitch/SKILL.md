@@ -88,10 +88,15 @@ continuous low-error paths in rectangular tile overlaps, including joined L-shap
 corners. Wider overlaps search only the 256 pixels nearest fresh content; older
 tiles retain the farther area. Unsupported irregular masks are reported as
 feather fallback and still require visual review.
-On substantial near-white backgrounds, silhouette QA also rejects compact new
-foreground protrusions beyond a 10-pixel source tolerance. It records the
-offending 32-pixel window for targeted inspection and retry. Other backgrounds
-still require explicit visual silhouette review.
+On a reliably detected, dominant uniform background (including white, gray,
+dark, or colored backdrops), silhouette QA rejects compact new foreground
+protrusions beyond a 10-pixel source tolerance. It records the offending
+32-pixel window for targeted inspection and retry. When overlapping tiles
+disagree on clear foreground versus background, the source resolves that
+conflict. The final composite keeps the source backdrop and a 4-pixel source
+edge while retaining redrawn detail inside broad subjects. Detection skips
+gradients, textured backgrounds, and thin subjects when confidence is low;
+those cases still require explicit visual silhouette review.
 Neither an edge score nor a clean seam proves semantic correctness.
 
 During generation, `progress.json` and the terminal bar show completed image

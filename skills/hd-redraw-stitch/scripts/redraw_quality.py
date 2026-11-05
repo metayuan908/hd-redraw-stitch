@@ -83,11 +83,32 @@ def edge_distance(base, donor):
     return {"p95_pixels": float(np.percentile(distance[a], 95) / scale), "informative": True}
 
 
+def flat_background_color(image):
+    """Estimate a dominant uniform background from quiet image corners."""
+    rgb = np.asarray(image.convert("RGB"), dtype=np.int16)
+    height, width = rgb.shape[:2]
+    side = max(8, min(height, width)//16)
+    corners = (rgb[:side, :side], rgb[:side, -side:],
+               rgb[-side:, :side], rgb[-side:, -side:])
+    candidates = []
+    for patch in corners:
+        color = np.median(patch.reshape(-1, 3), axis=0)
+        if np.median(np.max(np.abs(patch-color), axis=2)) <= 8:
+            fraction = float((np.max(np.abs(rgb-color), axis=2) <= 18).mean())
+            candidates.append((fraction, color))
+    if not candidates:
+        return None
+    fraction, color = max(candidates, key=lambda item: item[0])
+    if fraction < .35:
+        return None
+    return color.astype(np.int16), fraction
+
+
 def foreground_overreach(base, donor, edit=None, tolerance=10, window=32):
-    """Find compact new foreground protrusions on a near-white source backdrop.
+    """Find compact new foreground protrusions on a uniform source backdrop.
 
     A p95 edge score can miss a small, conspicuous spike. This conservative
-    check runs only when the source crop has substantial near-white background.
+    check runs only when the source crop has a reliable flat background.
     It reports new dark/colored pixels outside the source silhouette plus a
     bounded tolerance; it does not alter either image.
     """
@@ -95,11 +116,12 @@ def foreground_overreach(base, donor, edit=None, tolerance=10, window=32):
     result = np.asarray(donor.convert("RGB"))
     if source.shape != result.shape:
         raise ValueError("Silhouette QA needs equal image dimensions")
-    background_fraction = float(np.all(source >= 245, axis=2).mean())
-    if background_fraction < .20:
-        return {"applicable": False, "reason": "no substantial white background"}
-    source_subject = np.any(source < 225, axis=2)
-    donor_subject = np.any(result < 225, axis=2)
+    background = flat_background_color(base)
+    if background is None:
+        return {"applicable": False, "reason": "no reliable flat background"}
+    color, _ = background
+    source_subject = np.max(np.abs(source.astype(np.int16)-color), axis=2) >= 35
+    donor_subject = np.max(np.abs(result.astype(np.int16)-color), axis=2) >= 35
     dilated = np.asarray(Image.fromarray(source_subject.astype(np.uint8)*255)
                          .filter(ImageFilter.MaxFilter(2*tolerance+1))) > 0
     extra = donor_subject & ~dilated
@@ -120,6 +142,70 @@ def foreground_overreach(base, donor, edit=None, tolerance=10, window=32):
             "max_window_pixels": int(counts[by, bx]),
             "window_bbox": [int(x0+bx), int(y0+by),
                             int(x0+bx+window), int(y0+by+window)]}
+
+
+def source_guided_overlap_selector(source, old, new, selector, edit, coverage):
+    """Prefer the tile that preserves clear foreground/background in overlap.
+
+    A minimum-error seam can keep a small background-colored hole in a subject.
+    Only decisive flat-background conflicts are overridden; ambiguous pixels
+    and images without a dominant uniform backdrop keep the original seam.
+    """
+    src = np.asarray(source.convert("RGB"))
+    prior = np.asarray(old.convert("RGB"))
+    donor = np.asarray(new.convert("RGB"))
+    if src.shape != prior.shape or src.shape != donor.shape:
+        raise ValueError("Source-guided overlap needs equal image dimensions")
+    background = flat_background_color(source)
+    if background is None:
+        return selector, {"applicable": False, "reason": "no reliable flat background"}
+    color, _ = background
+    def distance(a):
+        return np.max(np.abs(a.astype(np.int16)-color), axis=2)
+    src_distance, old_distance, new_distance = distance(src), distance(prior), distance(donor)
+    overlap = (np.asarray(edit.convert("L")) > 127) & (np.asarray(coverage.convert("L")) > 127)
+    clear_subject, src_background = src_distance >= 40, src_distance <= 18
+    old_subject, old_background = old_distance >= 35, old_distance <= 18
+    new_subject, new_background = new_distance >= 35, new_distance <= 18
+    choose_new = overlap & ((clear_subject & old_background & new_subject) |
+                            (src_background & old_subject & new_background))
+    choose_old = overlap & ((clear_subject & new_background & old_subject) |
+                            (src_background & new_subject & old_background))
+    result = np.array(selector.convert("L"))
+    result[choose_new] = 255
+    result[choose_old] = 0
+    return Image.fromarray(result), {"applicable": True,
+                                     "choose_new_pixels": int(choose_new.sum()),
+                                     "choose_old_pixels": int(choose_old.sum())}
+
+
+def preserve_source_silhouette(source, result):
+    """Keep a broad subject's source outline against a uniform background.
+
+    The source supplies the backdrop and a narrow antialiased silhouette edge;
+    GPT redraw supplies the subject interior. Gradients and textured scenes are
+    left unchanged when no reliable flat background is found.
+    """
+    base = np.asarray(source.convert("RGB"))
+    if base.shape != np.asarray(result.convert("RGB")).shape:
+        raise ValueError("Silhouette lock needs equal image dimensions")
+    background = flat_background_color(source)
+    if background is None:
+        return result, {"applied": False, "reason": "no reliable flat background"}
+    color, _ = background
+    subject = np.max(np.abs(base.astype(np.int16)-color), axis=2) >= 35
+    if subject.mean() < .10:
+        return result, {"applied": False, "reason": "no broad subject"}
+    closed = (Image.fromarray(subject.astype(np.uint8)*255)
+              .filter(ImageFilter.MaxFilter(15))
+              .filter(ImageFilter.MinFilter(15)))
+    interior = closed.filter(ImageFilter.MinFilter(9))
+    if (np.asarray(interior) > 0).sum() < .70 * subject.sum():
+        return result, {"applied": False, "reason": "subject too thin for a 4px source edge"}
+    mask = interior.filter(ImageFilter.GaussianBlur(1))
+    merged = Image.composite(result.convert("RGB"), source.convert("RGB"), mask)
+    return merged, {"applied": True, "source_edge_pixels": 4,
+                    "source_background_fraction": float((np.asarray(mask) == 0).mean())}
 
 
 def align_donor(base, donor, mode="translation", max_shift=24.0, max_edge_distance=5.0):
