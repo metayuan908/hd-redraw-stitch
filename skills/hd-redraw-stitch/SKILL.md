@@ -106,8 +106,13 @@ stage 2/2. A single GPT Image request has no backend percentage; its progress
 remains `null` while running. Do not describe tile completion as a precise
 percentage of the current model request. Review `layout-plan.json` before paid
 tile requests: it records grid size, minimum overlap and repeated pixel ratio.
-The planner minimizes the whole grid under the native pixel budget; a pilot
-still validates the actual returned dimensions.
+The planner minimizes the whole grid under the native pixel budget and keeps
+its default overlap (up to 128 pixels). `--allow-narrower-overlap` is an
+explicit speed/cost option: it tries 112 or 96 pixels only if a narrower
+overlap removes a complete tile. This can make seams more visible, so inspect
+the pilot and final overlaps at 100%. Prefer a recent, matching
+`--native-profile` when it reduces tile count without narrowing overlaps.
+A pilot still validates the actual returned dimensions.
 
 ## Portable runtime
 

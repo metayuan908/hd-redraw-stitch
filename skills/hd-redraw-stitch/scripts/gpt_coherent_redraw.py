@@ -191,6 +191,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--tile-height", type=int)
     parser.add_argument("--overlap-x", type=int)
     parser.add_argument("--overlap-y", type=int)
+    parser.add_argument("--allow-narrower-overlap", action="store_true",
+                        help="Opt into narrower overlap only when it removes a tile; inspect seams after generation.")
     parser.add_argument("--max-tiles", type=int, default=64)
     parser.add_argument("--max-anchor-aspect-drift", type=float, default=0.05)
     parser.add_argument("--resume", action="store_true")
@@ -334,6 +336,7 @@ def main() -> int:
     tile_command.extend(runtime_flags(args))
     tile_command.extend(["--pilot-count",str(args.pilot_count),"--retries",str(args.retries)])
     if args.approve_pilot:tile_command.append("--approve-pilot")
+    if args.allow_narrower_overlap:tile_command.append("--allow-narrower-overlap")
     if instruction:
         tile_command.extend(["--instruction", instruction])
     for option, value in (

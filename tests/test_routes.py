@@ -11,6 +11,21 @@ class RouteTests(unittest.TestCase):
   self.assertLessEqual(width*height,1_200_000)
   self.assertEqual((len(positions(3840,width,overlap_x)),len(positions(1984,height,overlap_y))),(4,2))
   self.assertGreaterEqual(overlap_y,128)
+ def test_4k_planner_reduces_requests_only_with_adequate_overlap(self):
+  for structural in (False,True):
+   with self.subTest(structural=structural):
+    default=default_tile_geometry(3840,2160,structural)
+    self.assertGreaterEqual(len(positions(3840,default[0],default[2]))*
+                            len(positions(2160,default[1],default[3])),9)
+    width,height,overlap_x,overlap_y=default_tile_geometry(3840,2160,structural,
+                                                           allow_narrower_overlap=True)
+    self.assertLessEqual(width*height,1_200_000)
+    self.assertEqual((len(positions(3840,width,overlap_x)),len(positions(2160,height,overlap_y))),(4,2))
+    self.assertEqual((overlap_x,overlap_y),(112,112))
+ def test_observed_capacity_keeps_wider_overlap_with_eight_tiles(self):
+  width,height,overlap_x,overlap_y=default_tile_geometry(3840,2160,True,1_258_248)
+  self.assertEqual((len(positions(3840,width,overlap_x)),len(positions(2160,height,overlap_y))),(4,2))
+  self.assertEqual((overlap_x,overlap_y),(128,128))
  def test_architecture_without_semantic_masks_uses_anchor(self):
   with tempfile.TemporaryDirectory() as d:
    p=Path(d);Image.new('RGB',(128,96)).save(p/'source.png')

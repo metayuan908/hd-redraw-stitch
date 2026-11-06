@@ -68,29 +68,41 @@ def largest_model_size(width: int, height: int, pixel_budget: int = 1_500_000) -
 
 
 def default_tile_geometry(
-    target_width: int, target_height: int, structural: bool, native_pixel_budget: int = 1_200_000
+    target_width: int, target_height: int, structural: bool, native_pixel_budget: int = 1_200_000,
+    allow_narrower_overlap: bool = False,
 ) -> tuple[int, int, int, int]:
     # Search the complete grid, not only the area of one crop. A locally large
     # crop can force an almost duplicate final row or column.
     budget = native_pixel_budget
     if target_width * target_height <= budget:
         return target_width, target_height, 0, 0
-    best = None
-    max_width = min(target_width, budget // 16)
-    for width in range(16, max_width + 1, 16):
-        max_height = min(target_height, budget // width)
-        for height in range(16, max_height + 1, 16):
-            aspect_limit = 1.5 if structural else 3.0
-            if max(width, height) > aspect_limit * min(width, height):
-                continue
-            overlap_x = 0 if width == target_width else min(128, width // 8)
-            overlap_y = 0 if height == target_height else min(128, height // 8)
-            columns = 1 + math.ceil((target_width - width) / (width - overlap_x))
-            rows = 1 + math.ceil((target_height - height) / (height - overlap_y))
-            count = columns * rows
-            score = (count, count * width * height, abs(width - height))
-            if best is None or score < best[0]:
-                best = (score, (width, height, overlap_x, overlap_y))
+    def search(overlap_cap):
+        best = None
+        max_width = min(target_width, budget // 16)
+        for width in range(16, max_width + 1, 16):
+            max_height = min(target_height, budget // width)
+            for height in range(16, max_height + 1, 16):
+                aspect_limit = 1.5 if structural else 3.0
+                if max(width, height) > aspect_limit * min(width, height):
+                    continue
+                overlap_x = 0 if width == target_width else min(overlap_cap, width // 8)
+                overlap_y = 0 if height == target_height else min(overlap_cap, height // 8)
+                columns = 1 + math.ceil((target_width - width) / (width - overlap_x))
+                rows = 1 + math.ceil((target_height - height) / (height - overlap_y))
+                count = columns * rows
+                score = (count, count * width * height, abs(width - height))
+                if best is None or score < best[0]:
+                    best = (score, (width, height, overlap_x, overlap_y))
+        return best
+
+    # Keep the wider seam by default. A user may opt into a narrower seam only
+    # when that removes a full request; its visual quality still needs review.
+    best = search(128)
+    if allow_narrower_overlap:
+        for cap in (112, 96):
+            candidate = search(cap)
+            if candidate is not None and (best is None or candidate[0][0] < best[0][0]):
+                best = candidate
     if best is None:
         raise SystemExit("No tile geometry fits the native pixel budget.")
     return best[1]
@@ -347,6 +359,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--overlap", type=int, help="Legacy equal-overlap shortcut.")
     parser.add_argument("--overlap-x", type=int)
     parser.add_argument("--overlap-y", type=int)
+    parser.add_argument("--allow-narrower-overlap", action="store_true",
+                        help="Opt into 112/96-pixel overlap only when it removes a tile; inspect seams after generation.")
     parser.add_argument(
         "--merge-mode",
         choices=("core", "feather", "minimum-error"),
@@ -480,6 +494,7 @@ def main() -> int:
         target_height,
         args.content_mode in structural_modes,
         budget,
+        args.allow_narrower_overlap,
     )
     tile_width = args.tile_width or args.tile_size or default_tile_width
     tile_height = args.tile_height or args.tile_size or default_tile_height

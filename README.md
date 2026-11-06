@@ -68,6 +68,11 @@ python3 skills/hd-redraw-stitch/scripts/gpt_segmented_redraw.py --help
 
 本仓库从本地安装插件导出，移除了 Python 缓存，保留原始技能与脚本。未附加开源许可证。
 
+## v0.5.5：减少 4K 分块请求
+
+- 默认继续使用较宽的拼接重叠。只有显式启用 `--allow-narrower-overlap`，规划器才在能减少整块请求时尝试 112 或 96 像素；缩窄后必须检查接缝。
+- 标准 3840×2160 横图在 120 万像素单块预算下，开启该选项可将离线规划由 9–10 块降为 8 块（4×2，重叠 112 像素）。已有同后端实测容量档案可在保持 128 像素重叠的情况下规划 8 块，优先使用这种方式。实际画质与耗时仍须通过生成验证。
+
 ## v0.5.0：名称与触发范围
 
 - 插件与主技能由 `restore-image-hd` 更名为 `hd-redraw-stitch`，显示为“高清重绘与拼接 / HD Redraw & Stitch”。
@@ -92,4 +97,4 @@ python3 skills/hd-redraw-stitch/scripts/gpt_segmented_redraw.py --help
 python3 -m unittest discover -s tests -v
 ```
 
-30 项离线测试通过；真实服务端并发加速尚未实测，不据模拟测试承诺任务耗时。
+32 项离线测试通过；真实服务端并发加速尚未实测，不据模拟测试承诺任务耗时。
