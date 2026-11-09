@@ -249,6 +249,15 @@ QR codes, or UI must remain exact.
 
 ## Coherent structural redraw
 
+Architecture defaults to crop-only image requests. The original image remains
+the local alignment reference; the complete generated anchor is saved for
+comparison. Use `--tile-context global` to explicitly send that anchor with
+each crop, or `--tile-context local` for crop-only requests in other modes.
+The architecture pilot defaults to two regions, covering an upper corner and
+a tile near the center. Inspect both at 100% before continuing. Each returned
+tile passes geometry and coverage checks before more work is dispatched;
+already in-flight requests may finish and remain resumable.
+
 Run a dry plan first:
 
 ```bash

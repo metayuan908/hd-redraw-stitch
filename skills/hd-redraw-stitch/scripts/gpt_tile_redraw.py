@@ -69,12 +69,12 @@ def largest_model_size(width: int, height: int, pixel_budget: int = 1_500_000) -
 
 def default_tile_geometry(
     target_width: int, target_height: int, structural: bool, native_pixel_budget: int = 1_200_000,
-    allow_narrower_overlap: bool = False,
+    allow_narrower_overlap: bool = False, context_margin: int = 0,
 ) -> tuple[int, int, int, int]:
     # Search the complete grid, not only the area of one crop. A locally large
     # crop can force an almost duplicate final row or column.
     budget = native_pixel_budget
-    if target_width * target_height <= budget:
+    if (target_width + 2 * context_margin) * (target_height + 2 * context_margin) <= budget:
         return target_width, target_height, 0, 0
     def search(overlap_cap):
         best = None
@@ -82,6 +82,10 @@ def default_tile_geometry(
         for width in range(16, max_width + 1, 16):
             max_height = min(target_height, budget // width)
             for height in range(16, max_height + 1, 16):
+                crop_width = width + 2 * context_margin
+                crop_height = height + 2 * context_margin
+                if crop_width * crop_height > budget:
+                    continue
                 aspect_limit = 1.5 if structural else 3.0
                 if max(width, height) > aspect_limit * min(width, height):
                     continue
@@ -256,8 +260,9 @@ def tile_prompt(
 Tile location: row {tile['row']}, column {tile['column']}; pixel origin
 ({tile['x']}, {tile['y']}) on a {canvas_width}x{canvas_height} target canvas.
 
-Redraw only the tile image as a faithful, sharper, higher-detail version of the
-same crop. Preserve the exact composition, crop, perspective, geometry, object
+Redraw only the editable mask as a faithful, sharper, higher-detail version of
+the same crop. Keep the surrounding context in the returned crop. Preserve the
+exact composition, crop, perspective, geometry, object
 positions, proportions, colors, lighting, visible text, numbers, logos, faces,
 product shapes, and all content touching every edge. This tile overlaps adjacent
 tiles, so boundary content must remain aligned. Do not zoom, shift, rotate,
@@ -397,6 +402,8 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Complete globally coherent composition used only as a tile anchor.",
     )
+    parser.add_argument("--local-context", action="store_true",
+                        help="Keep the complete composition local; send only the crop and mask.")
     parser.add_argument("--work-dir", type=Path)
     parser.add_argument("--gpt-cli")
     parser.add_argument("--resume", action="store_true")
@@ -484,6 +491,9 @@ def main() -> int:
 
     from redraw_runtime import native_budget, scoped_profile
     budget = native_budget(args.native_profile, scoped_profile(find_gpt_cli(args.gpt_cli), args.quality), args.native_pixel_budget)
+    context_margin = (math.ceil(args.max_shift) + 2
+                      if args.content_mode in structural_modes and args.alignment != "none"
+                      and args.max_shift > 0 else 0)
     (
         default_tile_width,
         default_tile_height,
@@ -495,6 +505,7 @@ def main() -> int:
         args.content_mode in structural_modes,
         budget,
         args.allow_narrower_overlap,
+        context_margin,
     )
     tile_width = args.tile_width or args.tile_size or default_tile_width
     tile_height = args.tile_height or args.tile_size or default_tile_height
@@ -532,6 +543,7 @@ def main() -> int:
     )
     if context_image and not context_image.is_file():
         raise SystemExit(f"Context image not found: {context_image}")
+    request_context = None if args.local_context else context_image
 
     source_ratio = source_width / source_height
     target_ratio = target_width / target_height
@@ -605,6 +617,17 @@ def main() -> int:
     if any(manifest.get(k)!=v for k,v in expected_geometry.items()):
         raise SystemExit("Resumed tile layout differs; choose a new work directory instead of reusing old coordinates.")
     tiles = manifest["tiles"]
+    def generation_box(tile):
+        x, y, w, h = (int(tile[k]) for k in ("x", "y", "width", "height"))
+        return (x-context_margin, y-context_margin, x+w+context_margin, y+h+context_margin)
+
+    crop_boxes = [generation_box(tile) for tile in tiles]
+    crop_sizes = [(r-l, b-t) for l, t, r, b in crop_boxes]
+    if any(w*h > budget or max(w,h) > 3840 for w,h in crop_sizes):
+        raise SystemExit("Tile crop with alignment context exceeds the native budget; use smaller tiles.")
+    crop_requests = {size: largest_model_size(*size, max(1_500_000, budget)) for size in set(crop_sizes)}
+    if any(rw < w or rh < h for (w,h), (rw,rh) in crop_requests.items()):
+        raise SystemExit("Tile request cannot cover its crop with alignment context; use smaller tiles.")
     if len(tiles) > args.max_tiles:
         raise SystemExit(
             f"This job needs {len(tiles)} GPT Image calls, above --max-tiles "
@@ -625,7 +648,9 @@ def main() -> int:
                    "minimum_overlap": [min(actual_overlap_x, default=0),
                                        min(actual_overlap_y, default=0)],
                    "repeated_pixel_ratio": round(total_tile_pixels / (target_width * target_height) - 1, 4),
-                   "planned_request_pixels": len(tiles) * request_width * request_height,
+                   "alignment_context_margin": context_margin,
+                   "request_context": "global" if request_context else "local",
+                   "planned_request_pixels": sum(math.prod(crop_requests[size]) for size in crop_sizes),
                    "native_pixel_budget": budget}
     atomic_json(work_dir / "layout-plan.json", layout_plan)
     print(
@@ -636,7 +661,9 @@ def main() -> int:
         f"grid={len(x_positions)}x{len(y_positions)}; "
         f"repeated pixels={layout_plan['repeated_pixel_ratio']:.1%}"
     )
-    if (request_width, request_height) != (tile_width, tile_height):
+    if context_margin:
+        print(f"GPT requests include up to {context_margin}px of context outside each editable tile.")
+    elif (request_width, request_height) != (tile_width, tile_height):
         print(
             f"GPT request size: {request_width}x{request_height}; "
             "responses will be normalized to tile dimensions"
@@ -656,6 +683,14 @@ def main() -> int:
     x_seams = axis_seams(tiles,"x")
     y_seams = axis_seams(tiles,"y")
     merge_mode = args.merge_mode or "minimum-error"
+    pilot_indices = set()
+    if args.content_mode == "architecture" and args.pilot_count > 1 and len(tiles) > 1:
+        center = min(range(1, len(tiles)), key=lambda i: (
+            tiles[i]["y"] == tiles[0]["y"],
+            ((tiles[i]["x"] + tile_width / 2) / target_width - 0.5) ** 2 +
+            ((tiles[i]["y"] + tile_height / 2) / target_height - 0.5) ** 2))
+        order = [0, center, *(i for i in range(1, len(tiles)) if i != center)]
+        pilot_indices = set(order[:args.pilot_count])
     for i,tile in enumerate(tiles):
         x,y,w,h = (int(tile[k]) for k in ("x","y","width","height"))
         box=(x,y,x+w,y+h)
@@ -675,9 +710,12 @@ def main() -> int:
         ImageDraw.Draw(mask).rectangle((edit_box[0],edit_box[1],edit_box[2]-1,edit_box[3]-1),fill=255)
         mask.save(mask_path)
         semantic_regions.append({"name":f"tile-{i+1:04d}","mask":str(mask_path),
-                                 "crop_bbox":box,"expand":0,"priority":i,
+                                 "crop_bbox":crop_boxes[i],"outer_context":context_margin,
+                                 "expand":0,"priority":i,
+                                 "pilot":i in pilot_indices,
                                  "mode":args.content_mode,
-                                 "instruction":tile_prompt(tile,target_width,target_height,user_instruction,context_image is not None)})
+                                 "instruction":tile_prompt({**tile, "x":crop_boxes[i][0], "y":crop_boxes[i][1]},
+                                                           target_width,target_height,user_instruction,request_context is not None)})
     regions_path=work_dir / "regions.json"
     atomic_json(regions_path,{"regions":semantic_regions})
     engine=Path(__file__).with_name("gpt_segmented_redraw.py")
@@ -689,7 +727,7 @@ def main() -> int:
              "--pilot-count",str(args.pilot_count),"--retries",str(args.retries),
              "--color-blur-radius",str(args.color_blur_radius),"--color-luma-limit",str(args.color_luma_limit),
              "--color-chroma-limit",str(args.color_chroma_limit),*runtime_flags(args)]
-    if context_image:command.extend(["--context-image",str(context_image)])
+    if request_context:command.extend(["--context-image",str(request_context)])
     if merge_mode in ("core","feather"):
         command.extend(["--seam-mode","feather"])
     if merge_mode=="core":command.extend(["--mask-feather","0"])

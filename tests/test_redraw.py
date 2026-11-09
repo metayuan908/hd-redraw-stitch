@@ -64,6 +64,22 @@ class RuntimeTests(unittest.TestCase):
    with JobLock(d):
     with self.assertRaises(RuntimeError):
      with JobLock(d):pass
+ def test_result_validation_stops_dispatch_and_preserves_raw(self):
+  with tempfile.TemporaryDirectory() as d:
+   jobs=self.jobs()
+   generated=[]
+   def generate(job,raw):
+    generated.append(job['id'])
+    Image.new('RGB',(64,64)).save(raw)
+   def validate(job,record):
+    if job['id']=='1':
+     raise RuntimeError('geometry rejected')
+   with self.assertRaisesRegex(RuntimeError,'geometry rejected'):
+    run_jobs(jobs,generate,self.inspect,d,workers=1,validate_result=validate)
+   self.assertEqual(generated,['0','1'])
+   record=json.loads((Path(d)/'jobs'/jobs[1]['id']/jobs[1]['signature']/'record.json').read_text())
+   self.assertEqual(record['state'],'generated')
+   self.assertTrue(Path(record['raw_path']).is_file())
  def test_capacity_scope_and_expiry(self):
   with tempfile.TemporaryDirectory() as d:
    p=Path(d)/'profile.json';save_capacity(p,[{'native_dimensions':[1500,1000]}],'scope')
@@ -95,6 +111,16 @@ class QualityTests(unittest.TestCase):
  def test_large_shift_rejected(self):
   base=self.pattern();donor=base.transform(base.size,Image.Transform.AFFINE,(1,0,-40,0,1,0))
   with self.assertRaisesRegex(RuntimeError,'exceeds'):align_donor(base,donor,'translation',10,5)
+ def test_bounded_translation_recovers_from_ambiguous_phase_peak(self):
+  base=self.pattern()
+  donor=base.transform(base.size,Image.Transform.AFFINE,(1,0,-7,0,1,4))
+  core=(16,16,base.width-16,base.height-16)
+  with patch('redraw_quality.phase_translation',return_value=((45,-4),15)):
+   _,report=align_donor(base,donor,'translation',12,5,edit_box=core)
+   self.assertEqual(report['translation'],[-7,4])
+   self.assertEqual(report['after']['p95_pixels'],0)
+   with self.assertRaisesRegex(RuntimeError,'exceeds'):
+    align_donor(base,donor,'translation',12,5,edit_box=(0,0,*base.size))
  def test_white_background_spike_is_detected_but_small_edge_shift_is_not(self):
   base=Image.new('RGB',(160,160),'white');ImageDraw.Draw(base).ellipse((35,35,125,125),fill='blue')
   shifted=Image.new('RGB',(160,160),'white');ImageDraw.Draw(shifted).ellipse((38,35,128,125),fill='blue')

@@ -127,7 +127,8 @@ def is_rate_limit(error):
 
 
 def run_jobs(jobs, generate, inspect, directory, *, workers=2, resume=False,
-             retries=1, retry_delay=2.0, reset_ids=(), on_progress=None):
+             retries=1, retry_delay=2.0, reset_ids=(), on_progress=None,
+             validate_result=None):
     """Generate immutable jobs, checkpoint each, serialize dispatch after a 429.
 
     generate(job, new_raw_path) owns its unique output. inspect(raw, job) must
@@ -151,7 +152,10 @@ def run_jobs(jobs, generate, inspect, directory, *, workers=2, resume=False,
                 raise RuntimeError(f"{job['id']}: cached raw file is missing or changed; explicitly retry this region, or use a new work directory")
             # Validate content again; file existence is never a resume criterion.
             inspect(raw, job)
-            records[job["id"]] = {**record, "resumed": True}
+            record = {**record, "resumed": True}
+            if validate_result:
+                validate_result(job, record)
+            records[job["id"]] = record
             journal.event("resume", job=job["id"], signature=job["signature"])
             if on_progress:
                 on_progress("resumed", job["id"], len(records), len(jobs), 0)
@@ -212,7 +216,10 @@ def run_jobs(jobs, generate, inspect, directory, *, workers=2, resume=False,
             for future in completed:
                 job, folder, attempt = active.pop(future)
                 try:
-                    records[job["id"]] = future.result()
+                    record = future.result()
+                    if validate_result:
+                        validate_result(job, record)
+                    records[job["id"]] = record
                     if on_progress:
                         on_progress("generated", job["id"], len(records), len(jobs), len(active))
                 except Exception as error:

@@ -10,4 +10,4 @@ with Image.open(a.image[0]) as opened:im=opened.convert('RGB')
 time.sleep(float(os.environ.get('FAKE_IMAGE_DELAY','.02')))
 Path(a.out).parent.mkdir(parents=True,exist_ok=True);im.save(a.out)
 if os.environ.get('FAKE_IMAGE_LOG'):
- with open(os.environ['FAKE_IMAGE_LOG'],'a') as f:f.write(json.dumps({'crop':a.image[0],'out':a.out,'time':time.time()})+'\n')
+ with open(os.environ['FAKE_IMAGE_LOG'],'a') as f:f.write(json.dumps({'crop':a.image[0],'images':len(a.image),'out':a.out,'time':time.time()})+'\n')

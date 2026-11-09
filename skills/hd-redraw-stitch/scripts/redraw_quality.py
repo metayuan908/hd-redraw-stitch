@@ -208,11 +208,79 @@ def preserve_source_silhouette(source, result):
                     "source_background_fraction": float((np.asarray(mask) == 0).mean())}
 
 
-def align_donor(base, donor, mode="translation", max_shift=24.0, max_edge_distance=5.0):
-    before = edge_distance(base, donor)
+def bounded_translation_candidates(base, donor, max_shift, box):
+    """Rank bounded shifts by normalized gradient agreement on a fixed area."""
+    limit = int(max_shift)
+    width, height = base.size
+    left, top, right, bottom = box
+    xs = range(max(-limit, right - width), min(limit, left) + 1)
+    ys = range(max(-limit, bottom - height), min(limit, top) + 1)
+    margin = limit + 2
+    if min(width, height) <= 2 * margin + 8:
+        return []
+    step = max(1, max(width, height) // 256)
+    source = np.gradient(_gray(base))
+    moving = np.gradient(_gray(donor))
+    reference = [g[margin:-margin:step, margin:-margin:step] for g in source]
+    norms = [float(np.linalg.norm(g)) for g in reference]
+    scores = []
+    for y in ys:
+        for x in xs:
+            scores_by_axis = []
+            for ref, norm, gradient in zip(reference, norms, moving):
+                patch = gradient[margin-y:height-margin-y:step, margin-x:width-margin-x:step]
+                if norm > 1e-6:
+                    scores_by_axis.append(float(np.sum(ref * patch)) /
+                                          max(norm * float(np.linalg.norm(patch)), 1e-6))
+            if scores_by_axis:
+                scores.append((float(np.mean(scores_by_axis)), x, y))
+    scores.sort(key=lambda item: (-item[0], abs(item[1]) + abs(item[2])))
+    return [(x, y) for _, x, y in scores[:12]]
+
+
+def align_donor(base, donor, mode="translation", max_shift=24.0, max_edge_distance=5.0,
+                edit_box=None):
+    box = edit_box or (0, 0, *base.size)
+    reference = base.crop(box)
+    before = edge_distance(reference, donor.crop(box))
     report = {"mode": mode, "before": before, "applied": False}
     if before["informative"] and before["p95_pixels"] <= max_edge_distance:
         return donor, {**report, "after": before, "reason": "already within geometry tolerance"}
+    if mode == "translation":
+        (dx, dy), confidence = phase_translation(base, donor)
+        report.update(phase_translation=[dx, dy], confidence=confidence)
+        # Callers without an edit box still get geometry diagnostics without
+        # applying the compositor's independent border-coverage requirement.
+        if edit_box is None:
+            margin = int(max_shift)
+            search_box = (margin, margin, base.width-margin, base.height-margin)
+        else:
+            search_box = box
+        left, top, right, bottom = search_box
+        if (confidence >= 6 and max(abs(dx), abs(dy)) <= max_shift
+                and right-base.width <= dx <= left and bottom-base.height <= dy <= top):
+            candidates = [(dx, dy)]
+        else:
+            candidates = []
+        result, after = donor, before
+        for shifts in (candidates, None):
+            if shifts is None:
+                if after["p95_pixels"] <= max_edge_distance:
+                    break
+                shifts = bounded_translation_candidates(base, donor, max_shift, search_box)
+            for x, y in shifts:
+                matrix = [[1, 0, -x], [0, 1, -y]]
+                aligned = donor.transform(base.size, Image.Transform.AFFINE,
+                                          (1, 0, -x, 0, 1, -y),
+                                          resample=Image.Resampling.BICUBIC)
+                metric = edge_distance(reference, aligned.crop(box))
+                if metric["p95_pixels"] < after["p95_pixels"]:
+                    result, after = aligned, metric
+                    report.update(applied=True, matrix=matrix, translation=[x, y])
+        report["after"] = after
+        if after["informative"] and after["p95_pixels"] > max_edge_distance:
+            raise RuntimeError(f"Geometric edge mismatch {after['p95_pixels']:.1f}px exceeds {max_edge_distance} after bounded alignment; regenerate region")
+        return result, report
     if mode == "none":
         result = donor
     else:
@@ -237,16 +305,13 @@ def align_donor(base, donor, mode="translation", max_shift=24.0, max_edge_distan
             angle = abs(float(np.degrees(np.arctan2(matrix[1,0], matrix[0,0]))))
             if np.any(np.abs(singular-1) > .02) or angle > 1 or np.max(np.abs(matrix[:,2])) > max_shift:
                 raise RuntimeError("Affine exceeds 2% scale/shear, 1 degree rotation or translation limit")
-        if confidence < 6 and mode == "translation":
-            # Never invent an alignment from an uninformative phase peak.
-            matrix = np.array([[1.,0.,0.],[0.,1.,0.]], dtype=np.float32)
         # One bounded affine mapping; no nonlinear flow that bends architecture.
         result = donor.transform(base.size, Image.Transform.AFFINE, tuple(matrix.ravel()),
                                  resample=Image.Resampling.BICUBIC)
         # Reject shifts requiring pixels beyond native crop coverage. Output is
         # only used under an eroded valid selector by the caller.
         report.update(matrix=matrix.tolist(), applied=not np.allclose(matrix, [[1,0,0],[0,1,0]]))
-    after = edge_distance(base, result)
+    after = edge_distance(reference, result.crop(box))
     if report["applied"] and after["p95_pixels"] > before["p95_pixels"]:
         result, after = donor, before
         report.update(applied=False, rejected_alignment="edge distance worsened")

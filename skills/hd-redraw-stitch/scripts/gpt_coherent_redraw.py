@@ -198,7 +198,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--retries", type=int, default=1)
-    parser.add_argument("--pilot-count", type=int, default=1)
+    parser.add_argument("--pilot-count", type=int,
+                        help="Defaults to two representative architecture tiles, one for other modes.")
+    parser.add_argument("--tile-context", choices=("auto", "local", "global"), default="auto",
+                        help="Send only the crop, or include the complete composition in each tile request.")
     parser.add_argument("--approve-pilot", action="store_true")
     parser.add_argument("--force-output", action="store_true")
     parser.add_argument("--allow-aspect-change", action="store_true")
@@ -334,7 +337,10 @@ def main() -> int:
     ]
     from redraw_runtime import runtime_flags
     tile_command.extend(runtime_flags(args))
-    tile_command.extend(["--pilot-count",str(args.pilot_count),"--retries",str(args.retries)])
+    pilot_count = args.pilot_count if args.pilot_count is not None else (2 if args.content_mode == "architecture" else 1)
+    tile_command.extend(["--pilot-count",str(pilot_count),"--retries",str(args.retries)])
+    if args.tile_context == "local" or (args.tile_context == "auto" and args.content_mode == "architecture"):
+        tile_command.append("--local-context")
     if args.approve_pilot:tile_command.append("--approve-pilot")
     if args.allow_narrower_overlap:tile_command.append("--allow-narrower-overlap")
     if instruction:

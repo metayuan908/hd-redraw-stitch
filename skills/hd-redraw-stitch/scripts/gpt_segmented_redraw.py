@@ -10,6 +10,7 @@ import json
 import sys
 import time
 from pathlib import Path
+import numpy as np
 
 from redraw_runtime import (Journal, JobLock, ProgressReporter, add_runtime_arguments, atomic_json,
                             file_hash, native_budget, run_jobs, save_capacity,
@@ -128,6 +129,19 @@ def request_bbox(bbox, canvas_size):
     left=max(0,min(canvas_size[0]-need_width,(left+right-need_width)//2))
     top=max(0,min(canvas_size[1]-need_height,(top+bottom-need_height)//2))
     return left,top,left+need_width,top+need_height
+
+
+def crop_with_context(image, box):
+    """Extend edge pixels only where generation context falls outside the canvas."""
+    left, top, right, bottom = box
+    clipped = (max(0, left), max(0, top), min(image.width, right), min(image.height, bottom))
+    crop = image.crop(clipped).convert("RGB")
+    if clipped == box:
+        return crop
+    x0, y0, x1, y1 = clipped
+    return Image.fromarray(np.pad(np.asarray(crop),
+                                  ((y0-top, bottom-y1), (x0-left, right-x1), (0, 0)),
+                                  mode="edge"))
 
 
 def normalize_donor(
@@ -617,11 +631,15 @@ def main() -> int:
         if region.get("crop_bbox") is not None:
             supplied = tuple(map(int, region["crop_bbox"]))
             core = edit.getbbox()
-            if len(supplied) != 4 or not (0 <= supplied[0] <= core[0] < core[2] <= supplied[2] <= target_size[0]
-                                       and 0 <= supplied[1] <= core[1] < core[3] <= supplied[3] <= target_size[1]):
-                raise SystemExit(f"Region {region['name']}: crop_bbox must contain its editable mask within canvas.")
+            outer = int(region.get("outer_context", 0))
+            if not 0 <= outer <= math.ceil(args.max_shift) + 2:
+                raise SystemExit(f"Region {region['name']}: invalid outer alignment context.")
+            if len(supplied) != 4 or not (-outer <= supplied[0] <= core[0] < core[2] <= supplied[2] <= target_size[0] + outer
+                                       and -outer <= supplied[1] <= core[1] < core[3] <= supplied[3] <= target_size[1] + outer):
+                raise SystemExit(f"Region {region['name']}: crop_bbox must contain its editable mask within the allowed context.")
             bbox = supplied
-        bbox = request_bbox(bbox,target_size)
+        if region.get("crop_bbox") is None or not region.get("outer_context"):
+            bbox = request_bbox(bbox,target_size)
         crop_size = (bbox[2] - bbox[0], bbox[3] - bbox[1])
         if crop_size[0] > 3840 or crop_size[1] > 3840:
             raise SystemExit(
@@ -736,7 +754,7 @@ def main() -> int:
     generation_dispatch_seconds = 0.0
     progress = None
     context_digest = file_hash(context_image) if context_image else None
-    processing_signature = signature({"quality_revision": 3, **{key: getattr(args, key) for key in (
+    processing_signature = signature({"quality_revision": 4, **{key: getattr(args, key) for key in (
         "alignment", "max_shift", "max_edge_distance", "seam_mode", "mask_feather",
         "boundary_ring", "max_boundary_delta", "no_color_harmonization",
         "color_blur_radius", "color_luma_limit", "color_chroma_limit",
@@ -749,7 +767,7 @@ def main() -> int:
             safe = "".join(c if c.isalnum() or c in "-_" else "-" for c in str(region["name"]))
             job_id = f"{index+1:03d}-{safe}-{pass_name}"
             prompt = build_prompt(region, pass_name, context_image is not None, args.instruction or "")
-            crop = anchor.crop(item["bbox"]).convert("RGB")
+            crop = crop_with_context(anchor, item["bbox"])
             selector = mask_for_gpt(item["edit"].crop(item["bbox"]))
             fingerprint = signature({"schema": 2, "crop": hashlib.sha256(crop.tobytes()).hexdigest(),
                                      "crop_size": crop.size, "mask": hashlib.sha256(selector.tobytes()).hexdigest(),
@@ -783,13 +801,26 @@ def main() -> int:
     def inspect(raw, job):
         return inspect_native(raw, job["expected"])
 
+    def validate_result(job, record):
+        try:
+            process(job, record)
+        except RuntimeError as error:
+            failure = {"job": job["id"], "bbox": item_by_id[job["id"]]["bbox"],
+                       "reason": str(error), "state": "quality_failed",
+                       "next_action": "Retry this complete region with --resume --retry-region"}
+            journal.event("quality_failed", **failure)
+            atomic_json(work_dir / "status.json", failure)
+            raise RuntimeError(f"{job['id']}: {error}. Use --resume --retry-region {job['id']}") from error
+
     def dispatch(selected, **options):
         nonlocal generation_dispatch_seconds
         started = time.monotonic()
         try:
             resets={job["id"] for job in selected if job["id"] in args.retry_region or item_by_id[job["id"]]["region"]["name"] in args.retry_region}
             return run_jobs(selected, generate, inspect, work_dir, retries=args.retries,
-                            reset_ids=resets, on_progress=progress.update, **options)
+                            reset_ids=resets, on_progress=progress.update,
+                            validate_result=validate_result if args.stage != "compose" else None,
+                            **options)
         except RuntimeError:
             # An undersized return is still evidence about actual capacity.
             observed = []
@@ -825,9 +856,10 @@ def main() -> int:
         with Image.open(job["crop_path"]) as opened:
             base_crop = opened.convert("RGB")
         geometry_begin = time.monotonic()
-        donor, geometry = align_donor(base_crop, donor, args.alignment, args.max_shift, args.max_edge_distance)
-        valid = alignment_valid_mask(donor.size, geometry)
         edit_crop = item["edit"].crop(item["bbox"])
+        donor, geometry = align_donor(base_crop, donor, args.alignment, args.max_shift,
+                                      args.max_edge_distance, edit_box=edit_crop.getbbox())
+        valid = alignment_valid_mask(donor.size, geometry)
         # A mask touching an invalid mapped edge is rejected, not filled with black
         # or silently replaced by an enlarged source crop.
         lost = ImageChops.subtract(edit_crop, valid)
@@ -875,9 +907,7 @@ def main() -> int:
             try:
                 donor, row = process(job, record)
             except RuntimeError as error:
-                next_action = ("Review a global-anchor route before more grid requests"
-                               if item["region"].get("mode") == "architecture" and not context_image
-                               else "Retry this complete region with --resume --retry-region")
+                next_action = "Retry this complete region with --resume --retry-region"
                 failures.append({"job":job["id"],"bbox":item["bbox"],"reason":str(error),
                                  "state":"quality_failed","next_action":next_action})
                 journal.event("quality_failed", **failures[-1])
